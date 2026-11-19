@@ -333,7 +333,7 @@ export async function createApp({ cfg, store, now = () => new Date(), verifyIdTo
     const url = new URL(req.url, 'http://localhost');
     const path = url.pathname;
     try {
-      if (path === '/healthz') return send(res, 200, { ok: true });
+      if (path === '/health') return send(res, 200, { ok: true });
 
       if (path === '/api/apply') {
         if (req.method !== 'POST' && req.method !== 'OPTIONS') throw new HttpError(405, 'method_not_allowed');

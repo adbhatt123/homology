@@ -27,7 +27,7 @@ export function loadConfig(env = process.env) {
 
     // Storage
     store: env.STORE || (production ? 'firestore' : 'memory'),
-    firestoreDatabase: env.FIRESTORE_DATABASE || 'homology',
+    firestoreDatabase: env.FIRESTORE_DATABASE || '(default)',
     firestoreCollection: env.FIRESTORE_COLLECTION || 'applications',
     projectId: env.GOOGLE_CLOUD_PROJECT || '',
     dataFile: env.DATA_FILE || '',
@@ -41,7 +41,6 @@ export function loadConfig(env = process.env) {
   const problems = [];
   if (production) {
     if (cfg.devLogin) problems.push('ALLOW_DEV_LOGIN must not be set in production.');
-    if (!cfg.googleClientId) problems.push('GOOGLE_CLIENT_ID is required.');
     if (cfg.sessionSecret.length < 32) problems.push('SESSION_SECRET must be at least 32 characters.');
     if (cfg.adminEmails.length === 0) problems.push('ADMIN_EMAILS must list at least one reviewer.');
     if (cfg.store !== 'firestore') problems.push('STORE must be firestore in production.');

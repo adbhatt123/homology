@@ -33,6 +33,8 @@ test('a genuine Google token for this app is accepted', async () => {
 });
 
 test('tokens that are not genuine are refused', async () => {
+  const unconfigured = createIdTokenVerifier({ clientId: '', getKeys: async () => jwks, now: () => NOW });
+  await assert.rejects(() => unconfigured(token()), (e) => e.code === 'wrong_audience', 'no client ID means no sign-in at all');
   await fails(token({}, { key: attacker.privateKey }), 'bad_signature');
   await fails(token({ aud: 'some-other-app' }), 'wrong_audience');
   await fails(token({ iss: 'https://evil.example' }), 'wrong_issuer');
@@ -65,7 +67,7 @@ test('production refuses to start without its guards', () => {
   assert.equal(loadConfig(base).cfg.store, 'firestore');
   assert.match(loadConfig({ ...base, ALLOW_DEV_LOGIN: '1' }).problems.join(), /ALLOW_DEV_LOGIN/);
   assert.match(loadConfig({ ...base, ADMIN_EMAILS: '' }).problems.join(), /ADMIN_EMAILS/);
-  assert.match(loadConfig({ ...base, GOOGLE_CLIENT_ID: '' }).problems.join(), /GOOGLE_CLIENT_ID/);
+  assert.deepEqual(loadConfig({ ...base, GOOGLE_CLIENT_ID: '' }).problems, [], 'sign-in can be added later');
   assert.match(loadConfig({ ...base, SESSION_SECRET: 'short' }).problems.join(), /SESSION_SECRET/);
   assert.match(loadConfig({ ...base, STORE: 'memory' }).problems.join(), /STORE/);
 });

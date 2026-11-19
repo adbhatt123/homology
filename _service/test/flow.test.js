@@ -363,3 +363,17 @@ test('a repeat application from the same email is kept and flagged for reviewers
   assert.equal(list.applications[0].answers.workingOn, 'A newer answer.', 'newest first');
   await app.close();
 });
+
+test('until Google sign-in is configured, nobody can get into the review view', async () => {
+  const app = await boot({ K_SERVICE: 'homology-applications', STORE: 'firestore' }, { identities: {} });
+  assert.equal(app.cfg.production, true);
+  assert.equal(app.cfg.googleClientId, '');
+  await app.apply(valid());
+  assert.equal((await app.store.list()).length, 1, 'applications are still received');
+  assert.equal((await app.call('POST', '/api/session', { body: { credential: 'anything' } })).status, 401);
+  assert.equal((await app.call('POST', '/api/dev-session', { body: { email: ADMIN } })).status, 404);
+  assert.equal((await app.call('GET', '/api/applications')).status, 401);
+  const config = await (await fetch(app.base + '/api/config')).json();
+  assert.equal(config.devLogin, false);
+  await app.close();
+});

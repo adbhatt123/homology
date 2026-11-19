@@ -44,27 +44,27 @@ npm run dev
 | Variable | Required in production | Purpose |
 | --- | --- | --- |
 | `ADMIN_EMAILS` | yes | Comma-separated Google accounts allowed into the review view. Checked on every request, so removing an address takes effect at once. |
-| `GOOGLE_CLIENT_ID` | yes | OAuth client ID (type "Web application") used for Google sign-in. |
+| `GOOGLE_CLIENT_ID` | for review | OAuth client ID (type "Web application") used for Google sign-in. Until it is set, applications are still received but nobody can open the review view. |
 | `SESSION_SECRET` | yes | At least 32 random characters. Signs the reviewer session cookie. Keep it in Secret Manager. |
 | `ALLOWED_ORIGINS` | no | Sites allowed to post applications. Default `https://homology.bio`. |
 | `SITE_URL` | no | Where the "Back to Homology" link points. Default `https://homology.bio/`. |
 | `SLACK_WORKSPACE_URL` | no | Default `https://homologybio.slack.com`. |
-| `FIRESTORE_DATABASE` | no | Default `homology`. |
+| `FIRESTORE_DATABASE` | no | Default `(default)`, the project's own database. |
 | `FIRESTORE_COLLECTION` | no | Default `applications`. |
 
 ## Deploy (Cloud Run + Firestore)
 
-Replace `PROJECT_ID`. Use a project whose owners are all people who may read applications, because project owners can read its databases.
+Production runs in the Google Cloud project `homology-bio`, at `https://homology-applications-1032824467826.us-east4.run.app`. The steps below are how it was set up. Use a project whose owners are all people who may read applications, because project owners can read its databases.
 
-1. Create the private database and a service identity that can only use it:
+1. Create the private database, a service identity for this service, and let the project's build account build it:
 
    ```bash
-   gcloud firestore databases create --project PROJECT_ID --database homology --location us-east4 --type firestore-native
+   gcloud firestore databases create --project PROJECT_ID --location us-east4 --type firestore-native
    gcloud iam service-accounts create homology-applications --project PROJECT_ID
    gcloud projects add-iam-policy-binding PROJECT_ID \
-     --member serviceAccount:homology-applications@PROJECT_ID.iam.gserviceaccount.com \
-     --role roles/datastore.user \
-     --condition 'title=homology-db-only,expression=resource.name.startsWith("projects/PROJECT_ID/databases/homology")'
+     --member serviceAccount:homology-applications@PROJECT_ID.iam.gserviceaccount.com --role roles/datastore.user
+   gcloud projects add-iam-policy-binding PROJECT_ID \
+     --member serviceAccount:PROJECT_NUMBER-compute@developer.gserviceaccount.com --role roles/run.builder
    ```
 
 2. Create the session secret:
