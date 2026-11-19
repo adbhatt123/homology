@@ -75,7 +75,7 @@ Production runs in the Google Cloud project `homology-bio`, at `https://homology
      --member serviceAccount:homology-applications@PROJECT_ID.iam.gserviceaccount.com --role roles/secretmanager.secretAccessor
    ```
 
-3. In the Google Cloud console, under APIs and Services, Credentials, create an OAuth client ID of type "Web application". The consent screen must allow external users if any reviewer uses a personal Gmail account. Leave the origins empty for now.
+3. In the Google Cloud console, open Google Auth Platform. Set it up with audience "External" (needed if any reviewer uses a personal Gmail account), then under Clients create a client of type "Web application". Leave the origins empty for now. The app stays in "Testing", so under Audience add every reviewer as a test user. A reviewer has to be in both places: the test users in Google and `ADMIN_EMAILS` here.
 
 4. Write `_service/env.yaml` (it is ignored by git):
 
