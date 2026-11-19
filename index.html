@@ -25,7 +25,9 @@
 <script>
   /* Entrance motion is opt-in: content never waits on an animation in a tab nobody is looking at. */
   (function (d) {
-    function go() { d.documentElement.className = 'motion'; }
+    var root = d.documentElement;
+    root.classList.add('js');
+    function go() { root.classList.add('motion'); }
     if (d.visibilityState === 'visible') return go();
     d.addEventListener('visibilitychange', function seen() {
       if (d.visibilityState !== 'visible') return;
@@ -40,6 +42,9 @@
     --ink: #14302a;
     --ink-soft: #3d5048;
     --accent: #c4502d;
+    --accent-ink: #9f3d1f;
+    --field-line: #7d8a83;
+    --field: #fbfaf5;
 
     --serif: "Newsreader", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
     --mono: "Fragment Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
@@ -78,7 +83,11 @@
 
   ::selection { background: var(--ink); color: var(--paper); }
 
-  h1, p, figure { margin: 0; }
+  h1, h2, p, figure, dl, dd { margin: 0; }
+
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  [hidden] { display: none !important; }
 
   main {
     flex: 1;
@@ -90,6 +99,56 @@
   main > * { grid-column: 2; min-width: 0; }
 
   /* ---------- opening ---------- */
+
+  .top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.25rem 2rem;
+  }
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 1.75rem;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 2.875rem;
+    padding: 0.55em 1.2em;
+    border: 1px solid var(--ink);
+    border-radius: 2px;
+    background: var(--ink);
+    color: var(--paper);
+    font: 500 1.0625rem/1.2 var(--serif);
+    text-decoration: none;
+    cursor: pointer;
+    transition: background-color 0.2s, color 0.2s;
+  }
+  .btn:hover { background: #20483e; }
+  .btn:disabled { opacity: 0.6; cursor: default; }
+  .btn.quiet { background: transparent; color: var(--ink); }
+  .btn.quiet:hover { background: var(--ink); color: var(--paper); }
+
+  .signin {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.875rem;
+    font: 0.8125rem/1.2 var(--mono);
+    text-underline-offset: 0.3em;
+    text-decoration-thickness: 1px;
+  }
+  .signin:hover { color: var(--accent-ink); }
+
+  /* On a phone the two actions share one line under the name. */
+  @media (max-width: 30rem) {
+    .actions { gap: 0.5rem 1rem; }
+    .actions .btn { padding-inline: 1em; font-size: 1rem; }
+  }
 
   h1 {
     font-size: clamp(3.25rem, 1.6rem + 5.6vw, 6rem);
@@ -191,6 +250,150 @@
     text-wrap: balance;
   }
 
+  /* ---------- applying ---------- */
+
+  .apply {
+    width: min(100%, 34rem);
+    margin-left: auto;
+    margin-top: clamp(4rem, 9vw, 6.5rem);
+    scroll-margin-top: 2rem;
+  }
+  .apply:focus { outline: none; }
+  .apply h2 {
+    font-size: clamp(1.3rem, 1.05rem + 1.05vw, 1.85rem);
+    font-weight: 600;
+    line-height: 1.25;
+    letter-spacing: -0.005em;
+  }
+  .apply-intro {
+    margin-top: 0.75rem;
+    font-size: clamp(1.125rem, 1.04rem + 0.35vw, 1.3125rem);
+    line-height: 1.55;
+    text-wrap: pretty;
+  }
+  .apply-open { margin-top: 1.75rem; }
+
+  /* Closed until asked for. Without scripts the form is simply shown. */
+  .js .apply:not(.open) .form { display: none; }
+  .js .apply.open .apply-open { display: none; }
+
+  .form {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+    gap: 1.5rem 1.25rem;
+    margin-top: 2.25rem;
+  }
+  .form > .wide { grid-column: 1 / -1; }
+  .form-note { font: 0.8125rem/1.4 var(--mono); color: var(--ink-soft); }
+
+  .field label {
+    display: block;
+    font-size: 1.0625rem;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+  .field .hint {
+    margin-top: 0.2rem;
+    font-size: 0.9375rem;
+    line-height: 1.4;
+    color: var(--ink-soft);
+  }
+  .field input,
+  .field textarea {
+    display: block;
+    width: 100%;
+    margin-top: 0.5rem;
+    padding: 0.6rem 0.7rem;
+    border: 1px solid var(--field-line);
+    border-radius: 2px;
+    background: var(--field);
+    color: var(--ink);
+    font: 1.0625rem/1.45 var(--serif);
+  }
+  .field textarea { min-height: 7.5rem; resize: vertical; }
+  .field input::placeholder { color: #5b6a63; opacity: 1; }
+  .field input:focus-visible,
+  .field textarea:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 1px;
+    border-color: var(--ink);
+  }
+  .field [aria-invalid="true"] { border-color: var(--accent-ink); }
+  .field .error,
+  .form-problem {
+    margin-top: 0.4rem;
+    font-size: 0.9375rem;
+    line-height: 1.4;
+    color: var(--accent-ink);
+  }
+  .form-problem { margin-top: 0; font-size: 1.0625rem; }
+  .privacy { font-size: 0.9375rem; line-height: 1.45; color: var(--ink-soft); }
+  .trap { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+
+  .thanks {
+    margin-top: 2.25rem;
+    font-size: clamp(1.3rem, 1.05rem + 1.05vw, 1.75rem);
+    font-style: italic;
+    line-height: 1.3;
+    text-wrap: balance;
+  }
+  .thanks:focus { outline: none; }
+
+  /* ---------- the dinner ---------- */
+
+  .dinner {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2rem 4rem;
+    margin-top: clamp(4.5rem, 10vw, 7.5rem);
+    padding-top: clamp(2rem, 4.5vw, 3.25rem);
+    border-top: 1px solid rgba(20, 48, 42, 0.28);
+  }
+  @media (min-width: 60rem) {
+    .dinner { grid-template-columns: minmax(0, 1fr) 34rem; }
+  }
+  .dinner h2 {
+    font-size: clamp(1.75rem, 1.3rem + 2vw, 2.75rem);
+    font-weight: 400;
+    line-height: 1.1;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+  }
+  .dinner .series {
+    display: block;
+    margin-bottom: 0.9rem;
+    font: 0.8125rem/1.3 var(--mono);
+    letter-spacing: 0;
+    color: var(--ink-soft);
+  }
+  .vh {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .dinner-theme {
+    font-size: clamp(1.125rem, 1.04rem + 0.35vw, 1.3125rem);
+    line-height: 1.6;
+    text-wrap: pretty;
+  }
+  .facts {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 0.45rem 1.5rem;
+    margin-top: 1.75rem;
+    font-size: 1.0625rem;
+    line-height: 1.45;
+  }
+  .facts dt {
+    padding-top: 0.3em;
+    font: 0.75rem/1.3 var(--mono);
+    color: var(--ink-soft);
+  }
+  .dinner .btn { margin-top: 1.9rem; }
+
   /* ---------- footer ---------- */
 
   footer {
@@ -265,7 +468,13 @@
 </head>
 <body>
   <main>
-    <h1 class="rise">Homology</h1>
+    <div class="top">
+      <h1 class="rise">Homology</h1>
+      <nav class="actions rise" style="--i:2" aria-label="Membership">
+        <a class="btn" href="#apply" data-apply>Apply to join Homology</a>
+        <a class="signin" href="https://homologybio.slack.com">Member sign-in</a>
+      </nav>
+    </div>
 
     <p class="definition rise" style="--i:1">In biology, homology describes similarities inherited from a common ancestor. A human hand and a bat&rsquo;s wing: different functions, a shared foundation.</p>
 
@@ -306,6 +515,89 @@
       <p>We&rsquo;re bringing together people so an unanswered question in biology can meet a new approach in AI. This is where the people studying life, building new tools and turning discoveries into treatments can exchange ideas, challenge each other and build together.</p>
       <p class="closing">Because the missing piece in your work might be someone else&rsquo;s life&rsquo;s work.</p>
     </div>
+
+    <section class="apply" id="apply" aria-labelledby="apply-title" tabindex="-1">
+      <h2 id="apply-title">Membership is by application.</h2>
+      <p class="apply-intro">We read every application ourselves. You don&rsquo;t need to be starting a company or raising money to apply.</p>
+      <p class="apply-open"><a class="btn" href="#apply" data-apply>Apply to join Homology</a></p>
+
+      <!-- The address in "action" is the application service. It stores the answers privately as pending review. -->
+      <form class="form" id="apply-form" method="post" action="">
+        <p class="form-note wide">All fields are required.</p>
+
+        <div class="field">
+          <label for="f-name">Full name</label>
+          <input id="f-name" name="fullName" type="text" autocomplete="name" maxlength="120" required>
+        </div>
+
+        <div class="field">
+          <label for="f-email">Email</label>
+          <input id="f-email" name="email" type="email" autocomplete="email" maxlength="254" required>
+        </div>
+
+        <div class="field">
+          <label for="f-city">City</label>
+          <input id="f-city" name="city" type="text" autocomplete="address-level2" maxlength="120" required>
+        </div>
+
+        <div class="field">
+          <label for="f-linkedin">LinkedIn profile URL</label>
+          <input id="f-linkedin" name="linkedinUrl" type="text" inputmode="url" autocomplete="url" autocapitalize="none" spellcheck="false" placeholder="linkedin.com/in/yourname" maxlength="300" required>
+        </div>
+
+        <div class="field wide">
+          <label for="f-role">Current role and organization</label>
+          <p class="hint" id="h-role">Independent researchers, students and people exploring their next step are welcome.</p>
+          <input id="f-role" name="roleAndOrg" type="text" autocomplete="organization-title" maxlength="200" aria-describedby="h-role" required>
+        </div>
+
+        <div class="field wide">
+          <label for="f-working">What are you working on?</label>
+          <p class="hint" id="h-working">Your current project, research or problem you&rsquo;re exploring.</p>
+          <textarea id="f-working" name="workingOn" rows="4" maxlength="1500" aria-describedby="h-working" required></textarea>
+        </div>
+
+        <div class="field wide">
+          <label for="f-intro">Who would you most like us to introduce you to?</label>
+          <p class="hint" id="h-intro">Be specific about their role, expertise and what you&rsquo;d work on together.</p>
+          <textarea id="f-intro" name="introWish" rows="4" maxlength="1500" aria-describedby="h-intro" required></textarea>
+        </div>
+
+        <div class="field wide">
+          <label for="f-help">What could you help someone else with?</label>
+          <p class="hint" id="h-help">One or two areas of firsthand experience.</p>
+          <textarea id="f-help" name="canHelpWith" rows="4" maxlength="1500" aria-describedby="h-help" required></textarea>
+        </div>
+
+        <div class="trap" aria-hidden="true">
+          <label for="f-site">Leave this field empty</label>
+          <input id="f-site" name="company_website" type="text" tabindex="-1" autocomplete="off">
+        </div>
+
+        <p class="privacy wide">Your answers are private. They are read only by the people who review applications and make introductions.</p>
+        <p class="form-problem wide" id="apply-problem" role="alert" hidden></p>
+        <p class="wide"><button class="btn" type="submit">Send application</button></p>
+      </form>
+
+      <p class="thanks" id="apply-thanks" role="status" tabindex="-1" hidden>Thanks for applying. We review every application and will email you with next steps.</p>
+    </section>
+
+    <section class="dinner" aria-labelledby="dinner-title">
+      <div>
+        <h2 id="dinner-title"><span class="series">Homology Dinner Series 01<span class="vh">:</span></span> The Clinical Data Bottleneck</h2>
+        <dl class="facts">
+          <dt>when</dt><dd>December 21, 2026, 6:30&ndash;8:30 p.m. Eastern</dd>
+          <dt>where</dt><dd>New York City</dd>
+          <dt>seats</dt><dd>15, attendance by request and host approval</dd>
+          <dt>hosts</dt><dd>Adarsh Bhatt and Arthur Liang</dd>
+          <dt>sponsor</dt><dd>MongoDB</dd>
+        </dl>
+      </div>
+      <div>
+        <p class="dinner-theme">From promising molecules to evidence in humans, focusing on usable patient data, connecting molecular predictions to clinical outcomes, and differences in treatment response and safety.</p>
+        <a class="btn quiet" href="https://luma.com/techbio-data-dinner-dec21">Request a dinner invitation</a>
+      </div>
+    </section>
   </main>
 
   <footer>
@@ -327,6 +619,137 @@
         threads[i].setAttribute('class', '');
         i = (i + 5) % threads.length;
         threads[i].setAttribute('class', 'on');
+      });
+    })();
+
+    /* Membership application. The service decides what is valid; these checks
+       repeat its rules so mistakes show up before anything is sent. Sending an
+       application only stores it for review. It does not add anyone to Slack. */
+    (function () {
+      var section = document.getElementById('apply');
+      var form = document.getElementById('apply-form');
+      if (!section || !form || !window.fetch) return;
+
+      var thanks = document.getElementById('apply-thanks');
+      var problem = document.getElementById('apply-problem');
+      var send = form.querySelector('button[type="submit"]');
+      var endpoint = form.getAttribute('action');
+      if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) endpoint = 'http://localhost:4180/api/apply';
+
+      var EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+      var LINKEDIN = /^(https?:\/\/)?([a-z0-9-]+\.)*linkedin\.com\/(in|pub)\/[^\/\s?#]+/i;
+      var required = {
+        fullName: 'Please enter your full name.',
+        email: 'Please enter your email address.',
+        city: 'Please enter your city.',
+        linkedinUrl: 'Please enter your LinkedIn profile URL.',
+        roleAndOrg: 'Please enter your current role and organization.',
+        workingOn: 'Please answer this question.',
+        introWish: 'Please answer this question.',
+        canHelpWith: 'Please answer this question.'
+      };
+
+      function check(name, value) {
+        if (!value) return required[name];
+        if (name === 'email' && !EMAIL.test(value)) return 'Please enter a valid email address.';
+        if (name === 'linkedinUrl' && !LINKEDIN.test(value)) return 'Please enter a LinkedIn profile URL, for example linkedin.com/in/yourname.';
+        return '';
+      }
+
+      function mark(name, message) {
+        var input = form.elements[name];
+        if (!input) return;
+        var id = 'e-' + input.id;
+        var note = document.getElementById(id);
+        var described = (input.getAttribute('aria-describedby') || '').split(' ').filter(function (x) { return x && x !== id; });
+        if (!message) {
+          if (note) note.remove();
+          input.removeAttribute('aria-invalid');
+        } else {
+          if (!note) {
+            note = document.createElement('p');
+            note.className = 'error';
+            note.id = id;
+            input.insertAdjacentElement('afterend', note);
+          }
+          note.textContent = message;
+          input.setAttribute('aria-invalid', 'true');
+          described.push(id);
+        }
+        if (described.length) input.setAttribute('aria-describedby', described.join(' '));
+        else input.removeAttribute('aria-describedby');
+      }
+
+      function show(errors) {
+        var first = null;
+        Object.keys(required).forEach(function (name) {
+          mark(name, errors[name] || '');
+          if (errors[name] && !first) first = form.elements[name];
+        });
+        if (first) first.focus();
+      }
+
+      function fail(message) {
+        problem.textContent = message;
+        problem.hidden = false;
+      }
+
+      function open() { section.classList.add('open'); }
+
+      document.addEventListener('click', function (e) {
+        if (e.target.closest && e.target.closest('[data-apply]')) open();
+      });
+      function fromAddress() { if (location.hash === '#apply') open(); }
+      window.addEventListener('hashchange', fromAddress);
+      fromAddress();
+
+      form.setAttribute('novalidate', '');
+      form.addEventListener('input', function (e) {
+        if (e.target.name && e.target.getAttribute('aria-invalid')) mark(e.target.name, check(e.target.name, e.target.value.trim()));
+      });
+
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        problem.hidden = true;
+
+        var data = { company_website: form.elements.company_website.value };
+        var errors = {};
+        var bad = false;
+        Object.keys(required).forEach(function (name) {
+          data[name] = form.elements[name].value.trim();
+          errors[name] = check(name, data[name]);
+          if (errors[name]) bad = true;
+        });
+        show(errors);
+        if (bad) return;
+        if (!endpoint) return fail('Applications are not open yet. Please check back soon.');
+
+        send.disabled = true;
+        send.textContent = 'Sending\u2026';
+        fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
+          .then(function (res) {
+            return res.json().catch(function () { return {}; }).then(function (body) { return { status: res.status, body: body }; });
+          })
+          .then(function (res) {
+            if (res.status === 200 && res.body.ok) {
+              form.hidden = true;
+              thanks.hidden = false;
+              thanks.focus();
+            } else if (res.status === 422 && res.body.errors) {
+              show(res.body.errors);
+            } else if (res.status === 429) {
+              fail('We have received several applications from this connection in a short time. Please try again later.');
+            } else {
+              fail('We could not send your application. Please try again in a moment.');
+            }
+          })
+          .catch(function () {
+            fail('We could not send your application. Please check your connection and try again.');
+          })
+          .then(function () {
+            send.disabled = false;
+            send.textContent = 'Send application';
+          });
       });
     })();
   </script>

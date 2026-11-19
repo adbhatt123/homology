@@ -1,0 +1,18 @@
+{
+  "name": "homology-applications",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Stores Homology membership applications and serves the private review view.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "ALLOW_DEV_LOGIN=1 PORT=4180 ADMIN_EMAILS=${ADMIN_EMAILS:-reviewer@example.org,second.reviewer@example.org} ALLOWED_ORIGINS=http://localhost:4178 SITE_URL=http://localhost:4178/ DATA_FILE=.data/applications.json node src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@google-cloud/firestore": "^7.11.0"
+  }
+}
