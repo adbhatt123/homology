@@ -3,8 +3,13 @@
 // Public:   POST /api/apply            store one application as "pending"
 // Private:  /review and /api/...       sign-in required, allowlisted admins only
 //
-// Nothing here talks to Slack. Applying cannot grant access to anything, and
-// an invitation is only ever recorded by a signed-in admin after approval.
+// Optional: POST /api/slack/interactions   reviewers' button presses in Slack
+//
+// Applying cannot grant access to anything, and an invitation is only ever
+// recorded by a reviewer after approval. When Slack review is switched on, the
+// only Slack calls post each application to the reviewers' private channel and
+// keep that message up to date (src/slack.js). Nothing here can send a Slack
+// invitation.
 
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
@@ -25,10 +30,15 @@ import {
   sessionCookie,
   signSession,
 } from './auth.js';
+import { createSlackReview } from './slack.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(HERE, '..', 'public');
 const BODY_LIMIT = 32 * 1024;
+// Slack sends the whole message back with each button press.
+const SLACK_BODY_LIMIT = 512 * 1024;
+// How long an applicant or reviewer waits for Slack before we answer them anyway.
+const SLACK_WAIT_MS = 3500;
 
 export const THANKS = 'Thanks for applying. We review every application and will email you with next steps.';
 
@@ -86,16 +96,21 @@ function createLimiter({ perIp, windowMs, globalPerHour, now }) {
   };
 }
 
-async function readBody(req) {
+async function readRaw(req, limit = BODY_LIMIT) {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > BODY_LIMIT) throw new HttpError(413, 'too_large');
+    if (size > limit) throw new HttpError(413, 'too_large');
     chunks.push(chunk);
   }
-  return Buffer.concat(chunks).toString('utf8');
+  return Buffer.concat(chunks);
 }
+
+const readBody = async (req) => (await readRaw(req)).toString('utf8');
+
+const atMost = (ms, promise) =>
+  Promise.race([promise, new Promise((resolve) => setTimeout(resolve, ms).unref())]);
 
 async function readJson(req) {
   const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
@@ -110,7 +125,7 @@ async function readJson(req) {
   }
 }
 
-export async function createApp({ cfg, store, now = () => new Date(), verifyIdToken, log = console }) {
+export async function createApp({ cfg, store, now = () => new Date(), verifyIdToken, log = console, slackFetch = fetch }) {
   const assets = {
     '/review': { type: 'text/html; charset=utf-8', body: await readFile(join(PUBLIC_DIR, 'review.html')) },
     '/review.css': { type: 'text/css; charset=utf-8', body: await readFile(join(PUBLIC_DIR, 'review.css')) },
@@ -144,6 +159,8 @@ export async function createApp({ cfg, store, now = () => new Date(), verifyIdTo
   };
 
   const event = (name, fields = {}) => log.info(JSON.stringify({ event: name, at: now().toISOString(), ...fields }));
+
+  const slack = cfg.slack.enabled ? createSlackReview({ cfg, store, now, event, fetchImpl: slackFetch }) : null;
 
   const clientIp = (req) => {
     // Cloud Run appends the real client address as the last entry.
@@ -218,6 +235,9 @@ export async function createApp({ cfg, store, now = () => new Date(), verifyIdTo
     const application = newApplication(result.values, now().toISOString(), randomUUID());
     await store.create(application);
     event('application.submitted', { id: application.id });
+    // Tell the reviewers. The application is already saved, so nothing that
+    // happens in Slack can lose it or change what the applicant is told.
+    if (slack) await atMost(SLACK_WAIT_MS, slack.sync(application));
     return respond(200, { ok: true, message: THANKS }, { title: 'Application received', lines: [THANKS] });
   }
 
@@ -297,10 +317,31 @@ export async function createApp({ cfg, store, now = () => new Date(), verifyIdTo
     const nowIso = now().toISOString();
     const updated = await store.update(id, (doc) => apply(doc, body, admin, nowIso));
     if (!updated) throw new HttpError(404, 'not_found');
+    if (slack) await atMost(SLACK_WAIT_MS, slack.sync(updated));
     send(res, 200, { application: updated });
   }
 
+  // ---------- reviewers' button presses in Slack ----------
+
+  async function slackInteraction(req, res) {
+    if (!slack) throw new HttpError(404, 'not_found');
+    const raw = await readRaw(req, SLACK_BODY_LIMIT);
+    if (!slack.verify(req.headers, raw)) {
+      event('slack.bad_signature');
+      throw new HttpError(401, 'bad_signature');
+    }
+    let payload;
+    try {
+      payload = JSON.parse(new URLSearchParams(raw.toString('utf8')).get('payload'));
+    } catch {
+      throw new HttpError(400, 'invalid_body');
+    }
+    const out = await slack.interaction(payload);
+    send(res, out.status, out.body);
+  }
+
   const routes = [
+    ['POST', /^\/api\/slack\/interactions$/, (req, res) => slackInteraction(req, res)],
     ['POST', /^\/api\/session$/, (req, res) => signIn(req, res)],
     ['POST', /^\/api\/dev-session$/, (req, res) => devSignIn(req, res)],
     ['GET', /^\/api\/session$/, (req, res) => send(res, 200, { email: requireAdmin(req) })],

@@ -1,0 +1,28 @@
+# The Slack app that posts applications to the reviewers' private channel.
+# Create it at https://api.slack.com/apps > Create New App > From a manifest,
+# in the Homology workspace. See README.md, "Review in Slack".
+#
+# It asks for two permissions and nothing else:
+#   chat:write    post and edit its own messages, only in channels it was invited to
+#   groups:read   see that the reviewers channel is private and who is in it
+# It cannot read messages, see member emails or invite anyone to the workspace.
+display_information:
+  name: Homology Applications
+  description: Posts new membership applications to the reviewers' private channel.
+  background_color: "#14302a"
+features:
+  bot_user:
+    display_name: Homology Applications
+    always_online: false
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - groups:read
+settings:
+  interactivity:
+    is_enabled: true
+    request_url: https://homology-applications-1032824467826.us-east4.run.app/api/slack/interactions
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

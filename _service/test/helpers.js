@@ -22,7 +22,7 @@ export const valid = (over = {}) => ({
 });
 
 // Starts the real server on a free port with an in-memory store and a clock the test controls.
-export async function boot(envOver = {}, { identities = {} } = {}) {
+export async function boot(envOver = {}, { identities = {}, slackFetch } = {}) {
   const { cfg, problems } = loadConfig({
     ADMIN_EMAILS: `${ADMIN}, ${SECOND_ADMIN}`,
     SESSION_SECRET: 'test-secret-test-secret-test-secret-0123',
@@ -43,9 +43,15 @@ export async function boot(envOver = {}, { identities = {} } = {}) {
     }
     return identities[token];
   };
-  const handler = await createApp({ cfg, store, now, verifyIdToken, log });
+  // Tests never reach the real Slack: without a stand-in, any Slack call fails the test.
+  const noSlack = async () => {
+    throw new Error('unexpected call to Slack');
+  };
+  const handler = await createApp({ cfg, store, now, verifyIdToken, log, slackFetch: slackFetch || noSlack });
   const server = createServer(handler);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  // A test that fails before it closes its server must not keep the whole run waiting.
+  server.unref();
   const base = `http://127.0.0.1:${server.address().port}`;
 
   const cookieFor = (email, ms = 3600_000) =>

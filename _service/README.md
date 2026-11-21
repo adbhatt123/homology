@@ -4,6 +4,7 @@ The public site (`index.html`, served by GitHub Pages) is a static page and cann
 
 1. **Receives applications** from the form on homology.bio and stores them privately as "Pending review".
 2. **Serves the review view** at `/review`, where authorized reviewers read applications, decide, keep private notes and record Slack invitations.
+3. **Optionally posts each application to the reviewers' private Slack channel**, where the same reviewers can decide with buttons. See "Review in Slack" below.
 
 The folder name starts with an underscore so GitHub Pages leaves it out of the published site.
 
@@ -23,11 +24,68 @@ Rules the server enforces (see `src/applications.js`, covered by `test/flow.test
 - Every decision, note edit and invitation record is stored with the reviewer's email and the time, in the application's history.
 - Dinner requests live in Luma. Nothing here reads them, so a dinner request or approval cannot create a membership.
 
-### Slack
+### Slack invitations
 
-Slack only offers an API for sending workspace invitations on Enterprise Grid, so this service does not send them. After approval the review view shows a manual step: open `https://homologybio.slack.com/admin/invites`, invite the applicant's email as a member, then press "Record invitation sent". The service makes no calls to Slack at all.
+Slack only offers an API for sending workspace invitations on Enterprise Grid, so this service does not send them. After approval the review view shows a manual step: open `https://homologybio.slack.com/admin/invites`, invite the applicant's email as a member, then press "Record invitation sent". Nothing in this service can invite anyone to Slack, with or without the Slack review below.
 
 `https://homologybio.slack.com` on the public page is a sign-in address for existing members. It is not an invitation. Do not publish or paste a reusable invite link anywhere.
+
+## Review in Slack
+
+When the Slack settings are present, each new application is posted to one private channel, and reviewers can press Approve, Decline, Move back to pending, Record invitation sent, Mark as joined, Clear invitation record and Add note there. A decision made in Slack and one made in the review view are the same thing: same rules, same record of who and when (Slack changes are marked `via: slack` in the history), and the Slack message is redrawn after every change from either place.
+
+What keeps this private and safe (see `src/slack.js`, covered by `test/slack.test.js`):
+
+- **Only reviewers see answers.** Before posting, the service checks that the channel is private, is not shared with another organization, and has no member other than the app itself and the reviewers in `SLACK_REVIEWERS`. If any check fails, it posts a short notice with a link to the review view and no answers.
+- **Only reviewers can decide.** Every button press must carry Slack's signature, come from the Homology workspace and that channel, and be made by someone listed in `SLACK_REVIEWERS` whose email is also in `ADMIN_EMAILS`. Anyone else gets a private "you are not set up to review" reply and nothing changes. Removing someone from `ADMIN_EMAILS` stops their Slack buttons at once.
+- **Answers cannot act on Slack.** What applicants wrote is sent as plain text only, so it cannot ping the channel, mention people, disguise a link or change formatting. The phone notification says "New Homology application" and names nobody.
+- **Applying still grants nothing.** The application is saved before Slack is contacted. If Slack is down, the applicant still gets the thank-you line, the application is in the review view, and it is posted to Slack the next time it changes.
+- **Approval still invites nobody.** After approval the message shows the same manual step as the review view. The app has no permission that could send an invitation.
+
+The app's permissions are `chat:write` and `groups:read`. It cannot read messages or member emails.
+
+### Set it up
+
+1. Create a private channel for reviewers only, for example `#applications`. Add the reviewers and nobody else.
+2. Go to https://api.slack.com/apps, choose Create New App, From a manifest, pick the Homology workspace and paste `slack-app-manifest.yaml`. Install it to the workspace.
+3. In the reviewers channel, type `/invite @Homology Applications`.
+4. Store the app's two secrets. Copy each one in Slack, then run the matching command so the value goes from the clipboard straight into Secret Manager and never into a file or a chat:
+
+   ```bash
+   # "Bot User OAuth Token" on the app's OAuth & Permissions page
+   pbpaste | gcloud secrets create homology-slack-bot-token --project PROJECT_ID --data-file=-
+   # "Signing Secret" on the app's Basic Information page
+   pbpaste | gcloud secrets create homology-slack-signing-secret --project PROJECT_ID --data-file=-
+   ```
+
+   Then let the service read them:
+
+   ```bash
+   for name in homology-slack-bot-token homology-slack-signing-secret; do
+     gcloud secrets add-iam-policy-binding "$name" --project PROJECT_ID \
+       --member serviceAccount:homology-applications@PROJECT_ID.iam.gserviceaccount.com --role roles/secretmanager.secretAccessor
+   done
+   ```
+
+5. Add three lines to `_service/env.yaml`. The channel ID is the last part of the channel's link (right-click the channel, Copy link). A member ID is under the three dots on that person's Slack profile, Copy member ID.
+
+   ```yaml
+   SERVICE_URL: "https://homology-applications-PROJECT_NUMBER.us-east4.run.app"
+   SLACK_REVIEW_CHANNEL: "C0123456789"
+   SLACK_REVIEWERS: "U012ABCDEF=first.reviewer@example.org,U045GHIJKL=second.reviewer@example.org"
+   ```
+
+6. Deploy as in step 5 of "Deploy" below, with the two secrets added:
+
+   ```bash
+   --set-secrets SESSION_SECRET=homology-session-secret:latest,SLACK_BOT_TOKEN=homology-slack-bot-token:latest,SLACK_SIGNING_SECRET=homology-slack-signing-secret:latest
+   ```
+
+7. Check it with a made-up application: submit it on the site, see it appear in the channel, press Approve, then Decline, and confirm the review view shows the same. Delete the made-up record afterwards.
+
+To add a reviewer later: add them to the channel, to `SLACK_REVIEWERS`, to `ADMIN_EMAILS` and to the Google test users, then deploy. To turn Slack review off, remove the Slack lines from `env.yaml` and the two Slack secrets from the deploy command.
+
+Two things to expect. The first button press after a quiet spell can show a small warning in Slack, because the service takes a few seconds to wake and Slack only waits three; the change still goes through and the message updates. And anyone added to the reviewers channel who is not a reviewer can read what is already there, so keep the channel to reviewers.
 
 ## Run it locally
 
@@ -51,6 +109,14 @@ npm run dev
 | `SLACK_WORKSPACE_URL` | no | Default `https://homologybio.slack.com`. |
 | `FIRESTORE_DATABASE` | no | Default `(default)`, the project's own database. |
 | `FIRESTORE_COLLECTION` | no | Default `applications`. |
+| `SERVICE_URL` | for Slack | This service's own https address. Used for the "Open in review view" link. |
+| `SLACK_BOT_TOKEN` | for Slack | The Slack app's bot token. Keep it in Secret Manager. |
+| `SLACK_SIGNING_SECRET` | for Slack | Proves a button press came from Slack. Keep it in Secret Manager. |
+| `SLACK_REVIEW_CHANNEL` | for Slack | ID of the reviewers' private channel. |
+| `SLACK_REVIEWERS` | for Slack | `SlackMemberID=email` pairs, separated by commas. Each email must also be in `ADMIN_EMAILS`. |
+| `SLACK_TEAM_ID` | no | Default `T0CJTMG3DT8`, the Homology workspace. Presses from any other workspace are refused. |
+
+The five "for Slack" settings go together: the service refuses to start with only some of them.
 
 ## Deploy (Cloud Run + Firestore)
 
@@ -104,6 +170,7 @@ Production runs in the Google Cloud project `homology-bio`, at `https://homology
 ## What this does not do
 
 - It does not email applicants. "We will email you with next steps" is a promise the reviewers keep by hand.
-- It does not notify reviewers of new applications. Open `/review` to see what is pending.
+- It does not notify reviewers of new applications unless Slack review is set up. Without it, open `/review` to see what is pending.
+- It does not send Slack invitations, with or without Slack review.
 - It does not check whether an invited person has joined Slack. A reviewer marks that.
 - It does not delete applications. Remove a record in the Firestore console if one must go.
