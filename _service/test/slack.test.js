@@ -97,6 +97,8 @@ const texts = (blocks, type) => {
   walk(blocks);
   return found;
 };
+// Everything Slack will show exactly as typed: plain text objects and the text inside rich text blocks.
+const shown = (blocks) => [...texts(blocks, 'plain_text'), ...texts(blocks, 'text')];
 const buttons = (blocks) => blocks.filter((b) => b.type === 'actions').flatMap((b) => b.elements.map((e) => e.action_id));
 
 // ---------- settings ----------
@@ -173,9 +175,9 @@ test('a new application is posted once to the reviewers channel, and still only 
   assert.equal(args.text, 'New Homology application', 'the notification line names nobody');
   assert.equal(args.unfurl_links, 'false');
 
-  const shown = texts(args.blocks, 'plain_text');
+  const seen = shown(args.blocks);
   const a = { ...valid(), linkedinUrl: 'https://linkedin.com/in/test-applicant' };
-  for (const field of Object.keys(a)) assert.ok(shown.includes(a[field]), `${field} is shown exactly as written`);
+  for (const field of Object.keys(a)) assert.ok(seen.includes(a[field]), `${field} is shown exactly as written`);
   assert.deepEqual(buttons(args.blocks), ['status_approved', 'status_declined', 'notes_edit', 'link_profile', 'link_review']);
   assert.match(texts(args.blocks, 'mrkdwn').join('\n'), /\*Pending review\*/);
 
@@ -211,8 +213,9 @@ test('what an applicant writes cannot ping people, fake a link or format the mes
       if (value.includes(piece)) assert.ok(!marked.includes(piece), `"${piece}" must not reach Slack markup`);
     }
   }
-  const shown = texts(blocks, 'plain_text');
-  for (const value of Object.values(hostile)) assert.ok(shown.includes(value), 'kept exactly as written');
+  const seen = shown(blocks);
+  for (const value of Object.values(hostile)) assert.ok(seen.includes(value), 'kept exactly as written');
+  assert.ok(seen.includes(hostile.workingOn), 'line breaks are kept');
 
   const plainObjects = [];
   const walk = (node) => {
@@ -223,6 +226,9 @@ test('what an applicant writes cannot ping people, fake a link or format the mes
   };
   walk(blocks);
   assert.ok(plainObjects.every((o) => o.emoji === false), 'emoji codes are not converted');
+  const rich = blocks.filter((b) => b.type === 'rich_text').flatMap((b) => b.elements).flatMap((section) => section.elements);
+  assert.equal(rich.length, 3, 'one literal block per answer');
+  assert.ok(rich.every((e) => e.type === 'text' && e.style === undefined && e.url === undefined), 'only literal text, no links or styling');
   assert.equal((await only(app)).answers.fullName, hostile.fullName, 'stored exactly as written');
   await app.close();
 });
@@ -256,7 +262,7 @@ test('answers are not posted to a public channel', async () => {
   const updates = slack.of('chat.update');
   assert.equal(updates.length, 1);
   assert.equal(updates[0].args.ts, doc.slack.ts);
-  assert.ok(texts(updates[0].args.blocks, 'plain_text').includes(valid().fullName));
+  assert.ok(shown(updates[0].args.blocks).includes(valid().fullName));
   assert.equal((await only(app)).slack.full, true);
   assert.equal(slack.of('chat.postMessage').length, 1);
   await app.close();
@@ -326,7 +332,7 @@ test('an application Slack missed is posted the next time it changes', async () 
   await app.call('POST', `/api/applications/${doc.id}/notes`, { body: { text: 'Met at the dinner.' }, cookie: app.cookieFor(ADMIN) });
   const posts = slack.of('chat.postMessage');
   assert.equal(posts.length, 2);
-  assert.ok(texts(posts[1].args.blocks, 'plain_text').includes('Met at the dinner.'));
+  assert.ok(shown(posts[1].args.blocks).includes('Met at the dinner.'));
   assert.equal((await only(app)).slack.full, true);
   await app.close();
 });
@@ -569,7 +575,7 @@ test('notes can be written from Slack and stay attributed', async () => {
   assert.equal(doc.status, 'pending');
 
   const latest = slack.of('chat.update').at(-1).args.blocks;
-  assert.ok(texts(latest, 'plain_text').includes(doc.notes.text));
+  assert.ok(shown(latest).includes(doc.notes.text));
   assert.ok(!texts(latest, 'mrkdwn').join('\n').includes('<!channel>'));
   assert.ok(buttons(latest).includes('notes_edit'));
 
@@ -597,9 +603,9 @@ test('a note too long for Slack is edited in the review view instead', async () 
   const { id } = await only(app);
   const long = 'n'.repeat(3500);
   await app.call('POST', `/api/applications/${id}/notes`, { body: { text: long }, cookie: app.cookieFor(ADMIN) });
-  const shown = texts(slack.of('chat.update').at(-1).args.blocks, 'plain_text').find((t) => t.startsWith('nnn'));
-  assert.ok(shown.length <= 3000);
-  assert.match(shown, /The rest is in the review view/);
+  const cut = shown(slack.of('chat.update').at(-1).args.blocks).find((t) => t.startsWith('nnn'));
+  assert.ok(cut.length <= 3000);
+  assert.match(cut, /The rest is in the review view/);
   await send(app, press('notes_edit', id));
   assert.equal(slack.of('views.open').length, 0);
   assert.match(slack.state.whispers.at(-1).text, /too long to edit in Slack/);

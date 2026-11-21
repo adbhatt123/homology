@@ -11,7 +11,7 @@
 //   2. the workspace and the channel it came from
 //   3. the person who pressed it, matched to a reviewer who is in ADMIN_EMAILS
 //
-// What applicants wrote is only ever sent as plain text, never as Slack
+// What applicants wrote is only ever sent as literal text, never as Slack
 // markup, so an answer cannot ping people or disguise a link.
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
@@ -56,6 +56,14 @@ const plain = (text, max) => {
   const s = String(text ?? '');
   return { type: 'plain_text', text: s.length > max ? `${s.slice(0, max - 1)}…` : s || ' ', emoji: false };
 };
+
+// Longer text, such as an answer or a note. Slack keeps its line breaks and,
+// as with plain(), shows every character as typed: nothing in it is read as
+// formatting, a mention or a link.
+const literal = (text) => ({
+  type: 'rich_text',
+  elements: [{ type: 'rich_text_section', elements: [{ type: 'text', text: String(text ?? '') || ' ' }] }],
+});
 
 // Text this service wrote itself. Never pass applicant text here.
 const markup = (text) => ({ type: 'mrkdwn', text });
@@ -113,7 +121,7 @@ export function applicationMessage(app, { reviewUrl, invitesUrl }) {
     },
     ...QUESTIONS.flatMap(([question, key]) => [
       { type: 'context', elements: [markup(`*${question}*`)] },
-      { type: 'section', text: plain(a[key], 3000) },
+      literal(a[key]),
     ]),
     { type: 'context', elements: [markup(`Applied ${when(app.createdAt)}`)] },
     { type: 'divider' },
@@ -129,13 +137,7 @@ export function applicationMessage(app, { reviewUrl, invitesUrl }) {
         type: 'context',
         elements: [markup(`*Private notes*, last edited by ${escapeMarkup(app.notes.updatedBy)}, ${when(app.notes.updatedAt)}`)],
       },
-      {
-        type: 'section',
-        text: plain(
-          tooLong ? `${app.notes.text.slice(0, NOTE_LIMIT_IN_SLACK - 100)}…\n(The rest is in the review view.)` : app.notes.text,
-          NOTE_LIMIT_IN_SLACK,
-        ),
-      },
+      literal(tooLong ? `${app.notes.text.slice(0, NOTE_LIMIT_IN_SLACK - 100)}…\n(The rest is in the review view.)` : app.notes.text),
     );
   }
 
