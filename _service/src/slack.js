@@ -6,6 +6,10 @@
 // privacy setting and member list. It has no way to invite anyone to the
 // workspace, so the invitation stays a manual step that a reviewer records.
 //
+// A reviewer can also move an application to an intro call from here. The
+// call invite is an email the reviewer sends from their own inbox: the button
+// only opens the draft.
+//
 // Three checks stand between a button press and a change:
 //   1. Slack's signature on the request, so it really came from Slack
 //   2. the workspace and the channel it came from
@@ -15,7 +19,16 @@
 // markup, so an answer cannot ping people or disguise a link.
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { DomainError, STATUS_LABELS, recordInvitation, setNotes, setStatus } from './applications.js';
+import {
+  DomainError,
+  STATUS_LABELS,
+  callOf,
+  recordCallInvite,
+  recordInvitation,
+  setNotes,
+  setStatus,
+} from './applications.js';
+import { callInviteEmail, gmailDraftUrl } from './emails.js';
 import { normalizeLinkedin } from './validate.js';
 
 const API = 'https://slack.com/api';
@@ -23,6 +36,7 @@ const RESPONSE_URLS = 'https://hooks.slack.com/';
 const SIGNATURE_MAX_AGE_S = 300;
 const CALL_TIMEOUT_MS = 2500;
 const NOTE_LIMIT_IN_SLACK = 3000;
+const BUTTON_URL_LIMIT = 3000;
 const APPLICATION_ID = /^[0-9a-f-]{36}$/;
 const MEMBER_ID = /^[UW][A-Z0-9]{2,20}$/;
 
@@ -89,7 +103,18 @@ function decisionLine(app) {
   const name = STATUS_LABELS[app.status];
   if (!app.review) return `*${name}*`;
   const who = `${escapeMarkup(app.review.by)}, ${when(app.review.at)}`;
-  return app.status === 'pending' ? `*${name}* (moved back by ${who})` : `*${name}* by ${who}`;
+  if (app.status === 'pending') return `*${name}* (moved back by ${who})`;
+  if (app.status === 'call') return `*${name}* (moved to a call by ${who})`;
+  return `*${name}* by ${who}`;
+}
+
+function callLine(app) {
+  const call = callOf(app);
+  if (!call.inviteSentAt) {
+    return '*Call invite:* not sent. Write it from the button below, send it from your own inbox, then record it here.';
+  }
+  const sent = `*Call invite:* sent, recorded by ${escapeMarkup(call.inviteSentBy)}, ${when(call.inviteSentAt)}.`;
+  return app.status === 'call' ? `${sent} After the call, add what you learned as a note, then approve or decline.` : sent;
 }
 
 function invitationLine(app) {
@@ -103,9 +128,10 @@ function invitationLine(app) {
   return '*Slack invitation:* not sent. Approving adds nobody to Slack. Open Slack invitations, invite the email address above as a member, then record it here. Never use a shared invite link.';
 }
 
-export function applicationMessage(app, { reviewUrl, invitesUrl }) {
+export function applicationMessage(app, { reviewUrl, invitesUrl, callInviteUrl = '' }) {
   const a = app.answers;
   const inv = app.invitation;
+  const call = callOf(app);
   const locked = inv.status !== 'not_sent';
 
   const blocks = [
@@ -128,6 +154,7 @@ export function applicationMessage(app, { reviewUrl, invitesUrl }) {
     { type: 'section', text: markup(decisionLine(app)) },
   ];
 
+  if (app.status === 'call' || call.inviteSentAt) blocks.push({ type: 'section', text: markup(callLine(app)) });
   if (app.status === 'approved' || locked) blocks.push({ type: 'section', text: markup(invitationLine(app)) });
 
   if (app.notes.text) {
@@ -153,11 +180,26 @@ export function applicationMessage(app, { reviewUrl, invitesUrl }) {
         button('Record invitation sent', 'inv_sent', app.id, 'primary'),
       );
     }
+    // One step stands out at each stage: move to a call, send the call invite, then decide.
+    const atCall = app.status === 'call';
+    if (atCall && !call.inviteSentAt) {
+      if (callInviteUrl) decide.push(linkButton('Write call invite', 'link_call_invite', callInviteUrl));
+      decide.push(button('Record call invite sent', 'call_sent', app.id, 'primary'));
+    }
+    if (app.status === 'pending') decide.push(button('Move to call', 'status_call', app.id, 'primary'));
     if (app.status !== 'approved') {
-      decide.push(button('Approve', 'status_approved', app.id, app.status === 'pending' ? 'primary' : undefined));
+      decide.push(
+        button(
+          app.status === 'pending' ? 'Approve without a call' : 'Approve',
+          'status_approved',
+          app.id,
+          atCall && call.inviteSentAt ? 'primary' : undefined,
+        ),
+      );
     }
     if (app.status !== 'declined') decide.push(button('Decline', 'status_declined', app.id));
     if (app.status !== 'pending') decide.push(button('Move back to pending', 'status_pending', app.id));
+    if (atCall && call.inviteSentAt) decide.push(button('Clear call invite record', 'call_clear', app.id));
   }
 
   const more = [button(app.notes.text ? 'Edit note' : 'Add note', 'notes_edit', app.id)];
@@ -228,6 +270,15 @@ export function createSlackReview({ cfg, store, now, event, fetchImpl = fetch })
   const links = { reviewUrl: `${cfg.serviceUrl}/review`, invitesUrl: `${cfg.slackWorkspaceUrl}/admin/invites` };
   let botUserId = null;
 
+  // The call invite as a Gmail draft. Slack caps how long a button's link can
+  // be, so a draft that would not fit opens with the address and subject only.
+  const callInviteUrl = (app) => {
+    const email = callInviteEmail(app, { bookingUrl: cfg.callBookingUrl });
+    const full = gmailDraftUrl(email);
+    return full.length <= BUTTON_URL_LIMIT ? full : gmailDraftUrl({ ...email, body: '' });
+  };
+  const draw = (app) => applicationMessage(app, { ...links, callInviteUrl: callInviteUrl(app) });
+
   async function api(method, args) {
     const body = new URLSearchParams();
     for (const [key, value] of Object.entries(args)) body.set(key, typeof value === 'string' ? value : JSON.stringify(value));
@@ -272,7 +323,7 @@ export function createSlackReview({ cfg, store, now, event, fetchImpl = fetch })
 
   async function post(app) {
     const reason = await channelProblem();
-    const message = reason ? noticeMessage({ reviewUrl: links.reviewUrl, reason }) : applicationMessage(app, links);
+    const message = reason ? noticeMessage({ reviewUrl: links.reviewUrl, reason }) : draw(app);
     const sent = await api('chat.postMessage', {
       channel,
       text: message.text,
@@ -291,7 +342,7 @@ export function createSlackReview({ cfg, store, now, event, fetchImpl = fetch })
       // answers. Replace it with the application once the channel is.
       if (await channelProblem()) return;
     }
-    const message = applicationMessage(app, links);
+    const message = draw(app);
     await api('chat.update', { channel, ts: at.ts, text: message.text, blocks: message.blocks });
     if (!at.full) {
       await store.update(app.id, (doc) => ({ ...doc, slack: { ...doc.slack, full: true } }));
@@ -357,7 +408,19 @@ export function createSlackReview({ cfg, store, now, event, fetchImpl = fetch })
     return fromSlack(next, before);
   };
 
+  const callInvite = (action) => (doc, by, t) => {
+    const before = doc.history.length;
+    const had = callOf(doc).inviteSentAt;
+    const next = recordCallInvite(doc, action, by, t);
+    const has = callOf(next).inviteSentAt;
+    if (has !== had) event('application.call_invite', { id: doc.id, by, to: has ? 'sent' : 'not_sent', via: 'slack' });
+    return fromSlack(next, before);
+  };
+
   const CHANGES = {
+    status_call: decide('call'),
+    call_sent: callInvite('sent'),
+    call_clear: callInvite('clear'),
     status_approved: decide('approved'),
     status_declined: decide('declined'),
     status_pending: decide('pending'),

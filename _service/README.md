@@ -13,16 +13,37 @@ The folder name starts with an underscore so GitHub Pages leaves it out of the p
 | Step | Who | What happens | What does not happen |
 | --- | --- | --- | --- |
 | Apply | Anyone | One record is stored with status `pending` | No Slack access, no email, no sign-in |
-| Decide | A reviewer | Status becomes `approved` or `declined`, with who and when | Nobody is invited |
+| Call (optional) | A reviewer | Status becomes `call`. The reviewer emails the applicant an invite to a short intro call from their own inbox, then records that it went out | Nothing is decided and nobody is invited |
+| Decide | A reviewer | Status becomes `approved` or `declined`, with who and when. This can follow a call or skip it | Nobody is invited |
 | Invite | A reviewer, only after approval | The reviewer invites that one email address in Slack by hand, then records it here | No shared invite link is ever used |
 
 Rules the server enforces (see `src/applications.js`, covered by `test/flow.test.js`):
 
 - A new application is always `pending`. Anything else an applicant sends is ignored.
+- A call invite can only be recorded while the application is at the `call` stage. A call, however it goes, grants nothing.
 - An invitation can only be recorded while the application is `approved`.
 - While an invitation is on record, the decision cannot be changed. Revoke the invitation in Slack and clear the record first.
 - Every decision, note edit and invitation record is stored with the reviewer's email and the time, in the application's history.
 - Dinner requests live in Luma. Nothing here reads them, so a dinner request or approval cannot create a membership.
+
+### The intro call
+
+Reviewers can move an application to an intro call before deciding. The idea is a 15 minute conversation to learn what the person is working on and who they want to meet, so introductions are better. It is optional per application: "Approve without a call" and "Decline" stay available from the start.
+
+At the call stage the review view and the Slack message offer two steps:
+
+1. **Write the invite.** A link opens a ready-to-send draft in the reviewer's own Gmail, addressed to the applicant. This service never sends email. The wording is in `src/emails.js`.
+2. **Record call invite sent.** So the other reviewers know. It can be cleared if pressed by mistake.
+
+After the call, the reviewer writes what they learned in the private notes, then approves or declines.
+
+**Adding the booking link.** Until a link is set, the draft asks the applicant to suggest a couple of times. To switch to a booking link, add one line to `_service/env.yaml` and deploy:
+
+```yaml
+CALL_BOOKING_URL: "https://cal.com/your-name/intro"
+```
+
+Nothing else changes: the draft then says "You can pick a time here:" followed by the link, in both the review view and Slack.
 
 ### Slack invitations
 
@@ -32,7 +53,7 @@ Slack only offers an API for sending workspace invitations on Enterprise Grid, s
 
 ## Review in Slack
 
-When the Slack settings are present, each new application is posted to one private channel, and reviewers can press Approve, Decline, Move back to pending, Record invitation sent, Mark as joined, Clear invitation record and Add note there. A decision made in Slack and one made in the review view are the same thing: same rules, same record of who and when (Slack changes are marked `via: slack` in the history), and the Slack message is redrawn after every change from either place.
+When the Slack settings are present, each new application is posted to one private channel, and reviewers can press Move to call, Approve, Decline, Move back to pending, Record call invite sent, Record invitation sent, Mark as joined, Clear invitation record and Add note there. A decision made in Slack and one made in the review view are the same thing: same rules, same record of who and when (Slack changes are marked `via: slack` in the history), and the Slack message is redrawn after every change from either place.
 
 What keeps this private and safe (see `src/slack.js`, covered by `test/slack.test.js`):
 
@@ -109,6 +130,7 @@ npm run dev
 | `SLACK_WORKSPACE_URL` | no | Default `https://homologybio.slack.com`. |
 | `FIRESTORE_DATABASE` | no | Default `(default)`, the project's own database. |
 | `FIRESTORE_COLLECTION` | no | Default `applications`. |
+| `CALL_BOOKING_URL` | no | Where applicants book the intro call, as an https link. Until it is set, the call invite asks them to suggest times. |
 | `SERVICE_URL` | for Slack | This service's own https address. Used for the "Open in review view" link. |
 | `SLACK_BOT_TOKEN` | for Slack | The Slack app's bot token. Keep it in Secret Manager. |
 | `SLACK_SIGNING_SECRET` | for Slack | Proves a button press came from Slack. Keep it in Secret Manager. |
@@ -169,7 +191,8 @@ Production runs in the Google Cloud project `homology-bio`, at `https://homology
 
 ## What this does not do
 
-- It does not email applicants. "We will email you with next steps" is a promise the reviewers keep by hand.
+- It does not email applicants. "We will email you with next steps" is a promise the reviewers keep by hand. For the intro call it writes the draft, and a reviewer sends it.
+- It does not schedule calls or know whether one happened. The booking link, once set, is only text in the invite.
 - It does not notify reviewers of new applications unless Slack review is set up. Without it, open `/review` to see what is pending.
 - It does not send Slack invitations, with or without Slack review.
 - It does not check whether an invited person has joined Slack. A reviewer marks that.

@@ -178,7 +178,7 @@ test('a new application is posted once to the reviewers channel, and still only 
   const seen = shown(args.blocks);
   const a = { ...valid(), linkedinUrl: 'https://linkedin.com/in/test-applicant' };
   for (const field of Object.keys(a)) assert.ok(seen.includes(a[field]), `${field} is shown exactly as written`);
-  assert.deepEqual(buttons(args.blocks), ['status_approved', 'status_declined', 'notes_edit', 'link_profile', 'link_review']);
+  assert.deepEqual(buttons(args.blocks), ['status_call', 'status_approved', 'status_declined', 'notes_edit', 'link_profile', 'link_review']);
   assert.match(texts(args.blocks, 'mrkdwn').join('\n'), /\*Pending review\*/);
 
   const doc = await only(app);
@@ -654,5 +654,109 @@ test('logs never contain what applicants or reviewers wrote', async () => {
   }
   assert.ok(all.includes('"slack.failed"'));
   assert.ok(all.includes('"slack.refused"'));
+  await app.close();
+});
+
+// ---------- the intro call ----------
+
+test('a reviewer can move an application to a call from Slack and record the invite', async () => {
+  const { app, slack } = await start();
+  await app.apply(valid());
+  const { id } = await only(app);
+
+  // The call invite cannot be recorded before the application is at the call stage.
+  await send(app, press('call_sent', id));
+  assert.equal((await only(app)).call.inviteSentAt, null);
+  assert.match(slack.state.whispers.at(-1).text, /Move this application to the call stage/);
+
+  app.clock.t += 60_000;
+  assert.equal((await send(app, press('status_call', id))).status, 200);
+  let doc = await only(app);
+  assert.equal(doc.status, 'call');
+  assert.deepEqual(doc.review, { by: ADMIN, at: '2026-11-19T15:01:00.000Z' });
+  assert.deepEqual(doc.history.at(-1), { at: '2026-11-19T15:01:00.000Z', by: ADMIN, action: 'status', from: 'pending', to: 'call', via: 'slack' });
+  assert.equal(doc.invitation.status, 'not_sent', 'a call invites nobody to Slack');
+
+  let latest = slack.of('chat.update').at(-1).args;
+  assert.equal(latest.text, 'Homology application: intro call');
+  assert.deepEqual(buttons(latest.blocks), ['link_call_invite', 'call_sent', 'status_approved', 'status_declined', 'status_pending', 'notes_edit', 'link_profile', 'link_review']);
+  let said = texts(latest.blocks, 'mrkdwn').join('\n');
+  assert.match(said, /\*Intro call\* \(moved to a call by reviewer@example\.org/);
+  assert.match(said, /\*Call invite:\* not sent/);
+  assert.ok(!said.includes('Slack invitation'), 'no Slack invitation step at the call stage');
+
+  // The draft button opens Gmail, addressed to the applicant, and nothing else.
+  const draft = latest.blocks.flatMap((b) => b.elements || []).find((e) => e.action_id === 'link_call_invite');
+  const url = new URL(draft.url);
+  assert.equal(url.origin + url.pathname, 'https://mail.google.com/mail/');
+  assert.equal(url.searchParams.get('to'), 'Test.Applicant@example.org');
+  assert.equal(url.searchParams.get('su'), 'Homology | quick intro call');
+  assert.match(url.searchParams.get('body'), /^Hi Test,\n/);
+  assert.equal(url.searchParams.get('authuser'), null, 'the Slack message is shared, so it names no account');
+  assert.ok(draft.url.length <= 3000);
+  assert.equal((await send(app, press('link_call_invite', id))).status, 200, 'opening the draft records nothing');
+  assert.equal((await only(app)).call.inviteSentAt, null);
+
+  // Someone who is not a reviewer cannot record it.
+  await send(app, press('call_sent', id, { user: { id: MEMBER } }));
+  assert.equal((await only(app)).call.inviteSentAt, null);
+
+  app.clock.t += 60_000;
+  await send(app, press('call_sent', id, { user: { id: SECOND_REVIEWER } }));
+  doc = await only(app);
+  assert.deepEqual(doc.call, { inviteSentBy: SECOND_ADMIN, inviteSentAt: '2026-11-19T15:02:00.000Z' });
+  assert.deepEqual(doc.history.at(-1), { at: '2026-11-19T15:02:00.000Z', by: SECOND_ADMIN, action: 'call_invite', from: 'not_sent', to: 'sent', via: 'slack' });
+  assert.equal(doc.status, 'call');
+  latest = slack.of('chat.update').at(-1).args;
+  assert.deepEqual(buttons(latest.blocks).slice(0, 4), ['status_approved', 'status_declined', 'status_pending', 'call_clear']);
+  assert.match(texts(latest.blocks, 'mrkdwn').join('\n'), /\*Call invite:\* sent, recorded by second\.reviewer@example\.org.*After the call, add what you learned/);
+
+  // Clearing and recording again.
+  await send(app, press('call_clear', id));
+  assert.equal((await only(app)).call.inviteSentAt, null);
+  await send(app, press('call_sent', id));
+  await send(app, press('call_sent', id));
+  assert.match(slack.state.whispers.at(-1).text, /already on record/);
+
+  // After the call: approve. Only now does the Slack invitation step appear.
+  await send(app, press('inv_sent', id));
+  assert.equal((await only(app)).invitation.status, 'not_sent', 'a call is not an approval');
+  await send(app, press('status_approved', id));
+  doc = await only(app);
+  assert.equal(doc.status, 'approved');
+  latest = slack.of('chat.update').at(-1).args;
+  said = texts(latest.blocks, 'mrkdwn').join('\n');
+  assert.match(said, /\*Approved\* by reviewer@example\.org/);
+  assert.match(said, /\*Call invite:\* sent, recorded by reviewer@example\.org/);
+  assert.match(said, /\*Slack invitation:\* not sent/);
+  assert.deepEqual(buttons(latest.blocks).slice(0, 4), ['link_invites', 'inv_sent', 'status_declined', 'status_pending']);
+  await app.close();
+});
+
+test('the call can be skipped or end in a decline, from Slack', async () => {
+  const { app, slack } = await start();
+  await app.apply(valid());
+  await app.apply(valid({ email: 'second@example.org' }));
+  const [a, b] = await app.store.list();
+
+  await send(app, press('status_approved', a.id));
+  assert.equal((await app.store.get(a.id)).status, 'approved', 'approved without a call');
+  assert.equal((await app.store.get(a.id)).call.inviteSentAt, null);
+
+  await send(app, press('status_call', b.id));
+  await send(app, press('status_declined', b.id));
+  const declined = await app.store.get(b.id);
+  assert.equal(declined.status, 'declined');
+  assert.deepEqual(buttons(slack.of('chat.update').at(-1).args.blocks).slice(0, 2), ['status_approved', 'status_pending']);
+  await app.close();
+});
+
+test('with a booking link set, the Slack draft carries it', async () => {
+  const { app, slack } = await start({}, { CALL_BOOKING_URL: 'https://cal.example.org/homology/intro' });
+  await app.apply(valid());
+  const { id } = await only(app);
+  await send(app, press('status_call', id));
+  const draft = slack.of('chat.update').at(-1).args.blocks.flatMap((b) => b.elements || []).find((e) => e.action_id === 'link_call_invite');
+  assert.match(new URL(draft.url).searchParams.get('body'), /pick a time here:\nhttps:\/\/cal\.example\.org\/homology\/intro\n/);
   await app.close();
 });

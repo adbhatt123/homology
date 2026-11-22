@@ -40,6 +40,10 @@ export function loadConfig(env = process.env) {
     // Slack: existing members sign in here. This is never an invitation link.
     slackWorkspaceUrl: (env.SLACK_WORKSPACE_URL || 'https://homologybio.slack.com').replace(/\/+$/, ''),
 
+    // Where applicants book the intro call. Optional: until it is set, the
+    // call invite asks them to suggest times instead. See src/emails.js.
+    callBookingUrl: String(env.CALL_BOOKING_URL || '').trim(),
+
     // This service's own public address, used for links back to the review view.
     serviceUrl: String(env.SERVICE_URL || '').replace(/\/+$/, ''),
 
@@ -76,6 +80,17 @@ export function loadConfig(env = process.env) {
     if (cfg.allowedOrigins.some((o) => !o.startsWith('https://'))) problems.push('ALLOWED_ORIGINS must be https.');
   } else if (!cfg.sessionSecret) {
     cfg.sessionSecret = randomBytes(32).toString('hex');
+  }
+
+  if (cfg.callBookingUrl) {
+    let ok = false;
+    try {
+      const url = new URL(cfg.callBookingUrl);
+      ok = url.protocol === 'https:' && !url.username && !url.password;
+    } catch {
+      ok = false;
+    }
+    if (!ok) problems.push('CALL_BOOKING_URL must be an https link, for example https://cal.com/your-name/intro.');
   }
 
   // A half-configured Slack setup is refused everywhere, not only in production.

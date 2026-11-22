@@ -14,7 +14,7 @@
     view: 'loading', // loading | gate | list
     gateNote: '',
     apps: [],
-    labels: { pending: 'Pending review', approved: 'Approved', declined: 'Declined' },
+    labels: { pending: 'Pending review', call: 'Intro call', approved: 'Approved', declined: 'Declined' },
     filter: 'pending',
     query: '',
     open: new Set(),
@@ -76,7 +76,7 @@
     try {
       state.config = await api('GET', '/api/config');
     } catch (_) {
-      state.config = { googleClientId: '', devLogin: false, slack: { workspaceUrl: '', invitePeopleUrl: '', integration: 'manual' } };
+      state.config = { googleClientId: '', devLogin: false, slack: { workspaceUrl: '', invitePeopleUrl: '', integration: 'manual' }, call: { bookingLinkSet: false } };
     }
     try {
       state.me = (await api('GET', '/api/session')).email;
@@ -138,6 +138,18 @@
 
   const invitation = (app, action) =>
     act(async () => replace((await api('POST', `/api/applications/${app.id}/invitation`, { action })).application));
+
+  const callInvite = (app, action) =>
+    act(async () => replace((await api('POST', `/api/applications/${app.id}/call`, { action })).application));
+
+  // Only ever open a draft in Gmail.
+  function safeDraftUrl(value) {
+    try {
+      const url = new URL(value);
+      if (url.protocol === 'https:' && url.hostname === 'mail.google.com') return url.toString();
+    } catch (_) { /* fall through */ }
+    return null;
+  }
 
   async function copy(text, button) {
     try {
@@ -222,9 +234,9 @@
   }
 
   function toolbar() {
-    const counts = { pending: 0, approved: 0, declined: 0, all: state.apps.length };
-    for (const a of state.apps) counts[a.status] += 1;
-    const tabs = [['pending', state.labels.pending], ['approved', state.labels.approved], ['declined', state.labels.declined], ['all', 'All']];
+    const counts = { pending: 0, call: 0, approved: 0, declined: 0, all: state.apps.length };
+    for (const a of state.apps) counts[a.status] = (counts[a.status] || 0) + 1;
+    const tabs = [['pending', state.labels.pending], ['call', state.labels.call], ['approved', state.labels.approved], ['declined', state.labels.declined], ['all', 'All']];
     return h('div', { class: 'toolbar' },
       h('div', { class: 'filters', role: 'group', 'aria-label': 'Filter by status' },
         tabs.map(([key, label]) =>
@@ -256,6 +268,7 @@
     if (state.query.trim()) return h('div', { class: 'empty' }, h('strong', {}, 'No matches.'), 'Try a different search, or switch to All.');
     const messages = {
       pending: ['Nothing is waiting for review.', 'New applications land here first.'],
+      call: ['Nobody is at the call stage.', 'Move an application to a call to invite that person to a short intro call before deciding.'],
       approved: ['No approved applications.', 'Approve an application to make its Slack invitation step available.'],
       declined: ['No declined applications.', ''],
     };
@@ -265,6 +278,9 @@
 
   function chips(app) {
     const out = [h('span', { class: `chip ${app.status}` }, state.labels[app.status])];
+    if (app.status === 'call') {
+      out.push(h('span', { class: `chip ${app.call.inviteSentAt ? '' : 'quiet'}` }, app.call.inviteSentAt ? 'Call invite sent' : 'Call invite not sent'));
+    }
     if (app.status === 'approved' || app.invitation.status !== 'not_sent') {
       out.push(h('span', { class: `chip ${app.invitation.status === 'not_sent' ? 'quiet' : ''}` }, INVITATION_LABELS[app.invitation.status]));
     }
@@ -325,7 +341,7 @@
       left,
       h('div', {},
         state.error ? h('p', { class: 'message', role: 'alert' }, state.error) : null,
-        decisionPanel(app), notesPanel(app), invitationPanel(app)),
+        decisionPanel(app), callPanel(app), notesPanel(app), invitationPanel(app)),
     );
   }
 
@@ -339,17 +355,77 @@
         onclick: () => setStatus(app, status),
       }, label);
     const locked = app.invitation.status !== 'not_sent';
+    const by = app.review ? `${app.review.by} on ${fmt(app.review.at)}` : '';
+    const reviewed = !app.review ? 'Not reviewed yet.'
+      : app.status === 'call' ? `Moved to a call by ${by}.`
+      : app.status === 'pending' ? `Moved back to pending by ${by}.`
+      : `Reviewed by ${by}.`;
     return h('section', { class: 'panel' },
       h('h3', {}, 'Decision'),
       h('div', { class: 'state' }, h('span', { class: `chip ${app.status}` }, state.labels[app.status])),
-      h('p', { class: 'meta' }, app.review ? `Reviewed by ${app.review.by} on ${fmt(app.review.at)}.` : 'Not reviewed yet.'),
+      h('p', { class: 'meta' }, reviewed),
       locked
         ? h('p', { class: 'meta' }, 'A Slack invitation is on record. To change this decision, revoke the invitation in Slack and clear the record below.')
         : h('div', { class: 'actions' },
-            app.status !== 'approved' ? button('Approve', 'approved', true) : null,
+            app.status === 'pending' ? button('Move to call', 'call', true) : null,
+            app.status !== 'approved'
+              ? button(
+                  app.status === 'pending' ? 'Approve without a call' : 'Approve',
+                  'approved',
+                  // One step stands out at a time: at the call stage that is the invite, until it has gone out.
+                  app.status === 'declined' || (app.status === 'call' && Boolean(app.call.inviteSentAt)))
+              : null,
             app.status !== 'declined' ? button('Decline', 'declined', false) : null,
             app.status !== 'pending' ? button('Move back to pending', 'pending', false) : null),
     );
+  }
+
+  // The intro call: a short email invite the reviewer sends from their own
+  // inbox, then records here. Shown at the call stage, and afterwards as a
+  // one-line record if an invite went out.
+  function callPanel(app) {
+    const call = app.call;
+    if (app.status !== 'call' && !call.inviteSentAt) return null;
+    const button = (label, action, primary) =>
+      h('button', {
+        type: 'button',
+        class: `btn${primary ? ' primary' : ''}`,
+        'data-focus': `call-${action}-${app.id}`,
+        disabled: state.busy,
+        onclick: () => callInvite(app, action),
+      }, label);
+    const body = [];
+
+    if (call.inviteSentAt) {
+      body.push(
+        h('div', { class: 'state' }, h('span', { class: 'chip' }, 'Call invite sent')),
+        h('p', { class: 'meta' }, `Recorded by ${call.inviteSentBy} on ${fmt(call.inviteSentAt)}.`),
+      );
+      if (app.status === 'call') {
+        body.push(
+          h('p', { class: 'meta' }, 'After the call, add what you learned to the private notes, then approve or decline above.'),
+          h('div', { class: 'actions' }, button('Clear record', 'clear', false)),
+        );
+      }
+    } else {
+      const draft = safeDraftUrl(app.callInviteUrl);
+      body.push(
+        h('div', { class: 'state' }, h('span', { class: 'chip quiet' }, 'Call invite not sent')),
+        h('ol', { class: 'steps' },
+          h('li', {},
+            draft
+              ? h('a', { href: draft, target: '_blank', rel: 'noopener noreferrer', 'data-focus': `call-draft-${app.id}` }, 'Write the invite in Gmail')
+              : 'Write a short invite',
+            ' to ', h('span', { class: 'address' }, app.answers.email), '. It opens as a draft you can edit before sending.'),
+          h('li', {}, 'Come back and record it, so the other reviewers know.')),
+        h('p', { class: 'meta' }, state.config.call && state.config.call.bookingLinkSet
+          ? 'The draft includes the booking link.'
+          : 'No booking link is set yet, so the draft asks them to suggest a couple of times.'),
+        h('p', { class: 'meta' }, 'A call adds nobody to Slack. That still takes an approval and an invitation.'),
+        h('div', { class: 'actions' }, button('Record call invite sent', 'sent', true)),
+      );
+    }
+    return h('section', { class: 'panel' }, h('h3', {}, 'Intro call'), body);
   }
 
   function notesPanel(app) {
@@ -433,6 +509,7 @@
       if (e.action === 'notes') return `${e.by} edited the private notes`;
       if (e.action === 'status') return `${e.by} changed the decision from ${state.labels[e.from].toLowerCase()} to ${state.labels[e.to].toLowerCase()}`;
       if (e.action === 'invitation') return `${e.by} changed the invitation record from ${INVITATION_LABELS[e.from].toLowerCase()} to ${INVITATION_LABELS[e.to].toLowerCase()}`;
+      if (e.action === 'call_invite') return e.to === 'sent' ? `${e.by} recorded the call invite as sent` : `${e.by} cleared the call invite record`;
       return e.action;
     };
     return h('details', { class: 'history' },

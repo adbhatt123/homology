@@ -186,6 +186,7 @@ textarea { min-height: 6.5rem; resize: vertical; line-height: 1.45; }
   white-space: nowrap;
 }
 .chip.pending { border-color: var(--accent); color: var(--accent-ink); }
+.chip.call { border-color: var(--ink); color: var(--ink); font-weight: 600; }
 .chip.approved { background: var(--ink); border-color: var(--ink); color: var(--paper); }
 .chip.declined { color: var(--ink-soft); text-decoration: line-through; }
 .chip.quiet { border-style: dashed; color: var(--ink-soft); }

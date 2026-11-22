@@ -1,17 +1,21 @@
 // The rules of the membership flow, kept free of HTTP and storage so they can
 // be read and tested on their own.
 //
-// Three things are deliberately separate:
+// These things are deliberately separate:
 //   1. applying        creates a record with status "pending" and nothing else
-//   2. approval        an admin decision, recorded with who and when
-//   3. invitation      a later, explicit admin step that is only possible once
+//   2. the intro call  an optional stage: a reviewer moves the application to
+//                      "call", invites the applicant to a short call by email,
+//                      and records that the invite went out
+//   3. approval        an admin decision, recorded with who and when. It can
+//                      follow a call or skip it
+//   4. invitation      a later, explicit admin step that is only possible once
 //                      the application is approved
 //
-// One invariant ties them together: an invitation can only be on record while
-// the application is approved.
+// One invariant ties them together: a Slack invitation can only be on record
+// while the application is approved. A call, however it goes, grants nothing.
 
-export const STATUSES = ['pending', 'approved', 'declined'];
-export const STATUS_LABELS = { pending: 'Pending review', approved: 'Approved', declined: 'Declined' };
+export const STATUSES = ['pending', 'call', 'approved', 'declined'];
+export const STATUS_LABELS = { pending: 'Pending review', call: 'Intro call', approved: 'Approved', declined: 'Declined' };
 export const INVITATION_STATUSES = ['not_sent', 'sent', 'joined'];
 export const NOTES_LIMIT = 5000;
 
@@ -23,6 +27,11 @@ export class DomainError extends Error {
   }
 }
 
+const noCallInvite = () => ({ inviteSentBy: null, inviteSentAt: null });
+
+// The call invite record, also for applications saved before the call stage existed.
+export const callOf = (app) => app.call || noCallInvite();
+
 export function newApplication(values, nowIso, id) {
   return {
     id,
@@ -33,6 +42,7 @@ export function newApplication(values, nowIso, id) {
     status: 'pending',
     review: null,
     notes: { text: '', updatedBy: null, updatedAt: null },
+    call: noCallInvite(),
     invitation: {
       status: 'not_sent',
       method: null,
@@ -47,7 +57,7 @@ export function newApplication(values, nowIso, id) {
 
 export function setStatus(app, status, admin, nowIso) {
   if (!STATUSES.includes(status)) {
-    throw new DomainError('invalid_status', 'Status must be pending, approved or declined.');
+    throw new DomainError('invalid_status', 'Status must be pending, call, approved or declined.');
   }
   if (app.status === status) return app;
   if (app.invitation.status !== 'not_sent') {
@@ -73,6 +83,35 @@ export function setNotes(app, text, admin, nowIso) {
   app.notes = { text: value, updatedBy: admin, updatedAt: nowIso };
   app.history.push({ at: nowIso, by: admin, action: 'notes' });
   return app;
+}
+
+// The email inviting an applicant to a short intro call. A reviewer sends it
+// from their own inbox, then records it here so the other reviewers know.
+// action: "sent"   the invite has gone out. Only at the call stage.
+//         "clear"  the record was made by mistake
+export function recordCallInvite(app, action, admin, nowIso) {
+  const call = callOf(app);
+
+  if (action === 'clear') {
+    if (!call.inviteSentAt) return app;
+    app.history.push({ at: nowIso, by: admin, action: 'call_invite', from: 'sent', to: 'not_sent' });
+    app.call = noCallInvite();
+    return app;
+  }
+
+  if (action === 'sent') {
+    if (app.status !== 'call') {
+      throw new DomainError('not_at_call_stage', 'Move this application to the call stage before recording a call invite.', 409);
+    }
+    if (call.inviteSentAt) {
+      throw new DomainError('already_recorded', 'A call invite is already on record for this applicant.', 409);
+    }
+    app.history.push({ at: nowIso, by: admin, action: 'call_invite', from: 'not_sent', to: 'sent' });
+    app.call = { inviteSentBy: admin, inviteSentAt: nowIso };
+    return app;
+  }
+
+  throw new DomainError('invalid_action', 'Action must be sent or clear.');
 }
 
 // action: "sent"   an admin has invited this one email address in Slack

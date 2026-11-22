@@ -19,7 +19,17 @@ import { dirname, join } from 'node:path';
 
 import { loadConfig } from './config.js';
 import { validateApplication, clean } from './validate.js';
-import { DomainError, newApplication, recordInvitation, setNotes, setStatus, STATUS_LABELS } from './applications.js';
+import {
+  DomainError,
+  callOf,
+  newApplication,
+  recordCallInvite,
+  recordInvitation,
+  setNotes,
+  setStatus,
+  STATUS_LABELS,
+} from './applications.js';
+import { callInviteEmail, gmailDraftUrl } from './emails.js';
 import { MemoryStore, FirestoreStore } from './store.js';
 import {
   AuthError,
@@ -299,13 +309,21 @@ export async function createApp({ cfg, store, now = () => new Date(), verifyIdTo
     startSession(res, address);
   }
 
+  // What the review page gets for one application: the saved record, plus a
+  // link that opens the call invite as a draft in this reviewer's own Gmail.
+  const forReviewer = (app, admin) => ({
+    ...app,
+    call: callOf(app),
+    callInviteUrl: gmailDraftUrl(callInviteEmail(app, { bookingUrl: cfg.callBookingUrl }), { authuser: admin }),
+  });
+
   async function listApplications(req, res) {
-    requireAdmin(req);
+    const admin = requireAdmin(req);
     const all = (await store.list()).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
     const perEmail = new Map();
     for (const a of all) perEmail.set(a.emailKey, (perEmail.get(a.emailKey) || 0) + 1);
     send(res, 200, {
-      applications: all.map((a) => ({ ...a, otherApplications: perEmail.get(a.emailKey) - 1 })),
+      applications: all.map((a) => ({ ...forReviewer(a, admin), otherApplications: perEmail.get(a.emailKey) - 1 })),
       statusLabels: STATUS_LABELS,
     });
   }
@@ -318,7 +336,7 @@ export async function createApp({ cfg, store, now = () => new Date(), verifyIdTo
     const updated = await store.update(id, (doc) => apply(doc, body, admin, nowIso));
     if (!updated) throw new HttpError(404, 'not_found');
     if (slack) await atMost(SLACK_WAIT_MS, slack.sync(updated));
-    send(res, 200, { application: updated });
+    send(res, 200, { application: forReviewer(updated, admin) });
   }
 
   // ---------- reviewers' button presses in Slack ----------
@@ -359,6 +377,15 @@ export async function createApp({ cfg, store, now = () => new Date(), verifyIdTo
       })],
     ['POST', /^\/api\/applications\/([0-9a-f-]{36})\/notes$/, (req, res, [id]) =>
       change(req, res, id, (doc, body, admin, t) => setNotes(doc, body.text, admin, t))],
+    ['POST', /^\/api\/applications\/([0-9a-f-]{36})\/call$/, (req, res, [id]) =>
+      change(req, res, id, (doc, body, admin, t) => {
+        const before = callOf(doc).inviteSentAt;
+        const next = recordCallInvite(doc, body.action, admin, t);
+        if (callOf(next).inviteSentAt !== before) {
+          event('application.call_invite', { id, by: admin, to: callOf(next).inviteSentAt ? 'sent' : 'not_sent' });
+        }
+        return next;
+      })],
     ['POST', /^\/api\/applications\/([0-9a-f-]{36})\/invitation$/, (req, res, [id]) =>
       change(req, res, id, (doc, body, admin, t) => {
         const before = doc.invitation.status;
@@ -401,6 +428,7 @@ export async function createApp({ cfg, store, now = () => new Date(), verifyIdTo
             invitePeopleUrl: `${cfg.slackWorkspaceUrl}/admin/invites`,
             integration: 'manual',
           },
+          call: { bookingLinkSet: Boolean(cfg.callBookingUrl) },
         });
       }
 
