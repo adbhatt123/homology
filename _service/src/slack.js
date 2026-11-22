@@ -25,6 +25,7 @@ import {
   STATUS_LABELS,
   callOf,
   emailsOf,
+  receiptOf,
   recordCallInvite,
   recordDecisionEmail,
   recordInvitation,
@@ -164,7 +165,7 @@ export function applicationMessage(app, { reviewUrl, invitesUrl, drafts = {} }) 
       { type: 'context', elements: [markup(`*${question}*`)] },
       literal(a[key]),
     ]),
-    { type: 'context', elements: [markup(`Applied ${when(app.createdAt)}`)] },
+    { type: 'context', elements: [markup(`Applied ${when(app.createdAt)}${receiptOf(app).sentAt ? '. Receipt emailed to them.' : ''}`)] },
     { type: 'divider' },
     { type: 'section', text: markup(decisionLine(app)) },
   ];

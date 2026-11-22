@@ -867,3 +867,40 @@ test('an email recorded in the review view shows up in Slack', async () => {
   assert.deepEqual(buttons(latest).slice(0, 2), ['link_welcome_email', 'email_welcome_sent']);
   await app.close();
 });
+
+// ---------- the receipt ----------
+
+test('the Slack post says when the applicant was emailed a receipt', async () => {
+  const slack = fakeSlack();
+  const order = [];
+  const mailFetch = async (url, init) => {
+    order.push('mail');
+    assert.equal(String(url), 'https://api.resend.com/emails');
+    assert.deepEqual(JSON.parse(init.body).to, ['Test.Applicant@example.org']);
+    return new Response(JSON.stringify({ id: 'made-up-id' }), { status: 200 });
+  };
+  const slackFetch = async (url, init) => {
+    if (String(url).endsWith('/chat.postMessage')) order.push('slack');
+    return slack.fetchImpl(url, init);
+  };
+  const app = await boot(
+    { ...SLACK, RESEND_API_KEY: 're_made_up_key_for_tests', EMAIL_FROM: 'Homology <hello@homology.bio>' },
+    { slackFetch, mailFetch },
+  );
+  await app.apply(valid());
+  assert.deepEqual(order, ['mail', 'slack'], 'the receipt goes out first, so the post can say so');
+  const posted = slack.of('chat.postMessage')[0].args;
+  assert.match(texts(posted.blocks, 'mrkdwn').join('\n'), /Applied <!date\^\d+\^[^>]+>\. Receipt emailed to them\./);
+  assert.equal(posted.text, 'New Homology application');
+  const doc = await only(app);
+  assert.equal(doc.receipt.sentAt, '2026-11-19T15:00:00.000Z');
+  assert.equal(doc.slack.full, true, 'both records are kept');
+  await app.close();
+});
+
+test('without a receipt the Slack post does not claim one', async () => {
+  const { app, slack } = await start();
+  await app.apply(valid());
+  assert.ok(!texts(slack.of('chat.postMessage')[0].args.blocks, 'mrkdwn').join('\n').includes('Receipt'));
+  await app.close();
+});

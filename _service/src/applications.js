@@ -2,7 +2,9 @@
 // be read and tested on their own.
 //
 // These things are deliberately separate:
-//   1. applying        creates a record with status "pending" and nothing else
+//   1. applying        creates a record with status "pending" and nothing else.
+//                      The service emails the applicant a short receipt, which
+//                      says we have it and nothing more
 //   2. the intro call  an optional stage: a reviewer moves the application to
 //                      "call", invites the applicant to a short call by email,
 //                      and records that the invite went out
@@ -29,6 +31,17 @@ export class DomainError extends Error {
   }
 }
 
+// The automatic "we got it" email. Null until the service has sent it.
+const noReceipt = () => ({ sentAt: null });
+export const receiptOf = (app) => app.receipt || noReceipt();
+
+// Recorded by the service itself, never by an applicant or a reviewer.
+export function recordReceipt(app, nowIso) {
+  app.receipt = { sentAt: nowIso };
+  app.history.push({ at: nowIso, by: 'service', action: 'receipt' });
+  return app;
+}
+
 const noCallInvite = () => ({ inviteSentBy: null, inviteSentAt: null });
 
 // The call invite record, also for applications saved before the call stage existed.
@@ -52,6 +65,7 @@ export function newApplication(values, nowIso, id) {
     status: 'pending',
     review: null,
     notes: { text: '', updatedBy: null, updatedAt: null },
+    receipt: noReceipt(),
     call: noCallInvite(),
     emails: noEmails(),
     invitation: {

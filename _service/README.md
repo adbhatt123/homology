@@ -12,7 +12,7 @@ The folder name starts with an underscore so GitHub Pages leaves it out of the p
 
 | Step | Who | What happens | What does not happen |
 | --- | --- | --- | --- |
-| Apply | Anyone | One record is stored with status `pending` | No Slack access, no email, no sign-in |
+| Apply | Anyone | One record is stored with status `pending`. If the receipt is switched on, the applicant is emailed a short "we got it" note | No Slack access, no sign-in, and the receipt says nothing about the outcome |
 | Call (optional) | A reviewer | Status becomes `call`. The reviewer emails the applicant an invite to a short intro call from their own inbox, then records that it went out | Nothing is decided and nobody is invited |
 | Decide | A reviewer | Status becomes `approved` or `declined`, with who and when. This can follow a call or skip it | Nobody is invited |
 | Tell them | A reviewer | The reviewer sends a welcome or a decline email from their own inbox, then records that it went out | Nobody is invited. The welcome email holds no link |
@@ -46,6 +46,39 @@ CALL_BOOKING_URL: "https://cal.com/your-name/intro"
 ```
 
 Nothing else changes: the draft then says "You can pick a time here:" followed by the link, in both the review view and Slack.
+
+### The receipt
+
+This is the one email the service sends by itself. When an application is saved, the applicant gets a short note: we got it, you'll hear back from us soon. It is plain text, holds no link, and says nothing about the outcome. The wording is in `src/emails.js`.
+
+It goes out through Resend from an address on homology.bio (see `src/mailer.js`). Things worth knowing:
+
+- **It cannot be used to send someone else's text.** The subject, sender and body are fixed. The only thing in it an applicant typed is a first name, and only if it is made of letters.
+- **One address gets at most one receipt a day**, however many times it is entered into the form. Every application is still saved.
+- **It never blocks an application.** The application is saved first. If the mail service is down the failure is logged, the reviewers still see the application, and the review view shows "Not emailed".
+- **Nothing is sent for a submission that is not saved**: an invalid one, a trap-field one, or one past the rate limit.
+
+To switch it on:
+
+1. Add the domain in Resend and create the DNS records it lists (a DKIM record, plus an MX and an SPF record on a `send` subdomain).
+2. Create a Resend API key that can only send, and store it:
+
+   ```bash
+   pbpaste | gcloud secrets create homology-resend-api-key --project PROJECT_ID --data-file=-
+   gcloud secrets add-iam-policy-binding homology-resend-api-key --project PROJECT_ID \
+     --member serviceAccount:homology-applications@PROJECT_ID.iam.gserviceaccount.com --role roles/secretmanager.secretAccessor
+   ```
+
+3. Add the sender to `_service/env.yaml`, and where replies should go:
+
+   ```yaml
+   EMAIL_FROM: "Homology <hello@homology.bio>"
+   EMAIL_REPLY_TO: "first.reviewer@example.org"
+   ```
+
+4. Deploy with `RESEND_API_KEY=homology-resend-api-key:latest` added to `--set-secrets`.
+
+To switch it off, remove the two lines and the secret from the deploy command.
 
 ### Welcome and decline emails
 
@@ -141,6 +174,9 @@ npm run dev
 | `SLACK_WORKSPACE_URL` | no | Default `https://homologybio.slack.com`. |
 | `FIRESTORE_DATABASE` | no | Default `(default)`, the project's own database. |
 | `FIRESTORE_COLLECTION` | no | Default `applications`. |
+| `RESEND_API_KEY` | for the receipt | Key for the mail service that sends the receipt. Keep it in Secret Manager. |
+| `EMAIL_FROM` | for the receipt | Who the receipt is from, for example `Homology <hello@homology.bio>`. The domain must be verified in Resend. |
+| `EMAIL_REPLY_TO` | no | Where a reply to the receipt goes. |
 | `CALL_BOOKING_URL` | no | Where applicants book the intro call, as an https link. Until it is set, the call invite asks them to suggest times. |
 | `SERVICE_URL` | for Slack | This service's own https address. Used for the "Open in review view" link. |
 | `SLACK_BOT_TOKEN` | for Slack | The Slack app's bot token. Keep it in Secret Manager. |
@@ -202,7 +238,7 @@ Production runs in the Google Cloud project `homology-bio`, at `https://homology
 
 ## What this does not do
 
-- It does not email applicants. "We will email you with next steps" is a promise the reviewers keep by hand. For the intro call, the welcome and the decline it writes the draft, and a reviewer sends it.
+- It sends one email on its own, the receipt. Everything after that is a promise the reviewers keep by hand: for the intro call, the welcome and the decline it writes the draft, and a reviewer sends it.
 - It does not schedule calls or know whether one happened. The booking link, once set, is only text in the invite.
 - It does not notify reviewers of new applications unless Slack review is set up. Without it, open `/review` to see what is pending.
 - It does not send Slack invitations, with or without Slack review.

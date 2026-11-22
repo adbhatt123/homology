@@ -22,7 +22,7 @@ export const valid = (over = {}) => ({
 });
 
 // Starts the real server on a free port with an in-memory store and a clock the test controls.
-export async function boot(envOver = {}, { identities = {}, slackFetch } = {}) {
+export async function boot(envOver = {}, { identities = {}, slackFetch, mailFetch } = {}) {
   const { cfg, problems } = loadConfig({
     ADMIN_EMAILS: `${ADMIN}, ${SECOND_ADMIN}`,
     SESSION_SECRET: 'test-secret-test-secret-test-secret-0123',
@@ -47,7 +47,11 @@ export async function boot(envOver = {}, { identities = {}, slackFetch } = {}) {
   const noSlack = async () => {
     throw new Error('unexpected call to Slack');
   };
-  const handler = await createApp({ cfg, store, now, verifyIdToken, log, slackFetch: slackFetch || noSlack });
+  // The same goes for the mail service: no test sends a real email.
+  const noMail = async () => {
+    throw new Error('unexpected call to the mail service');
+  };
+  const handler = await createApp({ cfg, store, now, verifyIdToken, log, slackFetch: slackFetch || noSlack, mailFetch: mailFetch || noMail });
   const server = createServer(handler);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   // A test that fails before it closes its server must not keep the whole run waiting.

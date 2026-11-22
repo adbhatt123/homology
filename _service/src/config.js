@@ -40,6 +40,15 @@ export function loadConfig(env = process.env) {
     // Slack: existing members sign in here. This is never an invitation link.
     slackWorkspaceUrl: (env.SLACK_WORKSPACE_URL || 'https://homologybio.slack.com').replace(/\/+$/, ''),
 
+    // Optional: the receipt emailed to an applicant when their application is
+    // saved. See src/mailer.js. The key and the sender are set together.
+    email: {
+      enabled: Boolean(env.RESEND_API_KEY && env.EMAIL_FROM),
+      apiKey: env.RESEND_API_KEY || '',
+      from: String(env.EMAIL_FROM || '').trim(),
+      replyTo: String(env.EMAIL_REPLY_TO || '').trim(),
+    },
+
     // Where applicants book the intro call. Optional: until it is set, the
     // call invite asks them to suggest times instead. See src/emails.js.
     callBookingUrl: String(env.CALL_BOOKING_URL || '').trim(),
@@ -80,6 +89,21 @@ export function loadConfig(env = process.env) {
     if (cfg.allowedOrigins.some((o) => !o.startsWith('https://'))) problems.push('ALLOWED_ORIGINS must be https.');
   } else if (!cfg.sessionSecret) {
     cfg.sessionSecret = randomBytes(32).toString('hex');
+  }
+
+  // The receipt needs both the key and a sender on our own domain, or neither.
+  const address = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]{2,}$/;
+  const sender = /^(?:[^<>@\r\n]{1,60} )?<?([^\s@<>]+@[^\s@<>]+\.[^\s@<>]{2,})>?$/.exec(cfg.email.from);
+  if (Boolean(env.RESEND_API_KEY) !== Boolean(env.EMAIL_FROM)) {
+    problems.push('The receipt email needs RESEND_API_KEY and EMAIL_FROM together.');
+  } else if (cfg.email.enabled && !sender) {
+    problems.push('EMAIL_FROM must look like Homology <hello@homology.bio>.');
+  }
+  if (cfg.email.replyTo && !address.test(cfg.email.replyTo)) {
+    problems.push('EMAIL_REPLY_TO must be one email address.');
+  }
+  if (cfg.email.replyTo && !cfg.email.enabled) {
+    problems.push('EMAIL_REPLY_TO is set but the receipt email is not: add RESEND_API_KEY and EMAIL_FROM.');
   }
 
   if (cfg.callBookingUrl) {

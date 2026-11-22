@@ -28,6 +28,14 @@ function fakeFirestore() {
     data,
     collection: () => ({
       doc: ref,
+      where: (field, op, value) => ({
+        limit: () => ({
+          get: async () => {
+            if (op !== '==') throw new Error('only == is used');
+            return { docs: [...data.keys()].filter((id) => data.get(id)[field] === value).map(snap) };
+          },
+        }),
+      }),
       orderBy: (field, dir) => ({
         limit: () => ({
           get: async () => ({
@@ -61,6 +69,8 @@ test('the production store saves, lists newest first and updates in a transactio
 
   assert.deepEqual((await store.list()).map((d) => d.id), [newer.id, older.id]);
   assert.deepEqual(await store.get(older.id), older);
+  assert.deepEqual((await store.listByEmail('b@example.org')).map((d) => d.id), [newer.id]);
+  assert.deepEqual(await store.listByEmail('nobody@example.org'), []);
   assert.equal(await store.get('missing'), null);
   assert.equal(await store.update('missing', (d) => d), null);
 

@@ -1,16 +1,20 @@
-// Emails a reviewer sends by hand.
+// The emails applicants get, and who sends each one.
 //
-// This service never sends email. It writes the draft and opens it in the
-// reviewer's own Gmail, so every message is read by a person and goes out
-// from their own address. The reviewer then records that it was sent.
+// One is sent by this service itself: the receipt, the moment an application
+// is saved. It says we have it and nothing about the outcome.
 //
-// There are three: the invite to an intro call, the welcome after an
-// approval, and the note after a decline. To change the wording, edit the
-// text below. To add the booking link, set CALL_BOOKING_URL (see README.md,
-// "The intro call").
+// The other three are sent by a reviewer, by hand: the invite to an intro
+// call, the welcome after an approval, and the note after a decline. For
+// those the service only writes the draft and opens it in the reviewer's own
+// Gmail, so each is read by a person and goes out from their own address.
+// The reviewer then records that it was sent.
+//
+// To change the wording, edit the text below. To add the booking link, set
+// CALL_BOOKING_URL (see README.md, "The intro call").
 
 const GMAIL_COMPOSE = 'https://mail.google.com/mail/';
 
+export const RECEIPT_SUBJECT = 'We got your Homology application';
 export const CALL_INVITE_SUBJECT = 'Homology | quick intro call';
 export const WELCOME_SUBJECT = 'Welcome to Homology';
 export const DECLINE_SUBJECT = 'Your Homology application';
@@ -33,6 +37,16 @@ const letter = (app, subject, paragraphs) => ({
   subject,
   body: [greeting(app), ...paragraphs, SIGN_OFF].join('\n\n'),
 });
+
+// Sent automatically when an application is saved. The applicant's name is
+// the only thing in it that they typed, and firstName() lets through letters
+// only, so nobody can use the form to make us send their own text to someone.
+export function receiptEmail(app) {
+  return letter(app, RECEIPT_SUBJECT, [
+    'We got your application to Homology. Thanks for sending it in.',
+    "We read every one ourselves, so you'll hear back from us soon. Keep an eye out for an email from us.",
+  ]);
+}
 
 // The note inviting an applicant to a short call. With a booking link it
 // points there. Without one it asks for a couple of times instead, so the

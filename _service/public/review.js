@@ -76,7 +76,7 @@
     try {
       state.config = await api('GET', '/api/config');
     } catch (_) {
-      state.config = { googleClientId: '', devLogin: false, slack: { workspaceUrl: '', invitePeopleUrl: '', integration: 'manual' }, call: { bookingLinkSet: false } };
+      state.config = { googleClientId: '', devLogin: false, slack: { workspaceUrl: '', invitePeopleUrl: '', integration: 'manual' }, call: { bookingLinkSet: false }, receipt: { on: false } };
     }
     try {
       state.me = (await api('GET', '/api/session')).email;
@@ -332,6 +332,12 @@
         h('dt', {}, 'City'), h('dd', {}, a.city),
         h('dt', {}, 'Role'), h('dd', {}, a.roleAndOrg),
         h('dt', {}, 'Applied'), h('dd', {}, fmt(app.createdAt)),
+        // The automatic "we got it" email. Shown once it exists, or when it should have gone out and did not.
+        app.receipt && app.receipt.sentAt
+          ? [h('dt', {}, 'Receipt'), h('dd', {}, `Emailed to them ${fmt(app.receipt.sentAt)}`)]
+          : state.config.receipt && state.config.receipt.on
+            ? [h('dt', {}, 'Receipt'), h('dd', {}, 'Not emailed')]
+            : null,
       ),
       h('div', { class: 'answers' }, answers.map(([q, text]) => h('div', { class: 'answer' }, h('h3', {}, q), h('p', {}, text)))),
       app.otherApplications > 0
@@ -571,6 +577,7 @@
   function history(app) {
     const describe = (e) => {
       if (e.action === 'submitted') return 'Application received';
+      if (e.action === 'receipt') return 'Receipt emailed to the applicant';
       if (e.action === 'notes') return `${e.by} edited the private notes`;
       if (e.action === 'status') return `${e.by} changed the decision from ${state.labels[e.from].toLowerCase()} to ${state.labels[e.to].toLowerCase()}`;
       if (e.action === 'invitation') return `${e.by} changed the invitation record from ${INVITATION_LABELS[e.from].toLowerCase()} to ${INVITATION_LABELS[e.to].toLowerCase()}`;

@@ -1,6 +1,8 @@
 // Homology application service.
 //
-// Public:   POST /api/apply            store one application as "pending"
+// Public:   POST /api/apply            store one application as "pending" and,
+//                                      when switched on, email the applicant a
+//                                      short receipt
 // Private:  /review and /api/...       sign-in required, allowlisted admins only
 //
 // Optional: POST /api/slack/interactions   reviewers' button presses in Slack
@@ -27,11 +29,14 @@ import {
   recordCallInvite,
   recordDecisionEmail,
   recordInvitation,
+  recordReceipt,
+  receiptOf,
   setNotes,
   setStatus,
   STATUS_LABELS,
 } from './applications.js';
-import { draftUrls } from './emails.js';
+import { draftUrls, receiptEmail } from './emails.js';
+import { MailError, createMailer } from './mailer.js';
 import { MemoryStore, FirestoreStore } from './store.js';
 import {
   AuthError,
@@ -51,6 +56,10 @@ const BODY_LIMIT = 32 * 1024;
 const SLACK_BODY_LIMIT = 512 * 1024;
 // How long an applicant or reviewer waits for Slack before we answer them anyway.
 const SLACK_WAIT_MS = 3500;
+// How long an applicant waits for their receipt and the Slack post together.
+const NOTIFY_WAIT_MS = 5500;
+// One address gets at most one receipt in this long, however often it applies.
+const RECEIPT_GAP_MS = 24 * 3600_000;
 
 export const THANKS = 'Thanks for applying. We review every application and will email you with next steps.';
 
@@ -137,7 +146,7 @@ async function readJson(req) {
   }
 }
 
-export async function createApp({ cfg, store, now = () => new Date(), verifyIdToken, log = console, slackFetch = fetch }) {
+export async function createApp({ cfg, store, now = () => new Date(), verifyIdToken, log = console, slackFetch = fetch, mailFetch = fetch }) {
   const assets = {
     '/review': { type: 'text/html; charset=utf-8', body: await readFile(join(PUBLIC_DIR, 'review.html')) },
     '/review.css': { type: 'text/css; charset=utf-8', body: await readFile(join(PUBLIC_DIR, 'review.css')) },
@@ -173,6 +182,32 @@ export async function createApp({ cfg, store, now = () => new Date(), verifyIdTo
   const event = (name, fields = {}) => log.info(JSON.stringify({ event: name, at: now().toISOString(), ...fields }));
 
   const slack = cfg.slack.enabled ? createSlackReview({ cfg, store, now, event, fetchImpl: slackFetch }) : null;
+
+  const mailer = createMailer({ cfg, fetchImpl: mailFetch });
+
+  // Tells the applicant we have their application. It is already saved, so
+  // nothing here can lose it: a receipt that fails is logged and skipped.
+  // Returns the application as it now stands.
+  async function sendReceipt(application) {
+    if (!mailer) return application;
+    try {
+      const earlier = await store.listByEmail(application.emailKey);
+      const recent = earlier.some(
+        (a) => a.id !== application.id && receiptOf(a).sentAt && now().getTime() - Date.parse(receiptOf(a).sentAt) < RECEIPT_GAP_MS,
+      );
+      if (recent) {
+        event('receipt.skipped', { id: application.id, reason: 'recent' });
+        return application;
+      }
+      await mailer.send(receiptEmail(application));
+      const updated = await store.update(application.id, (doc) => recordReceipt(doc, now().toISOString()));
+      event('receipt.sent', { id: application.id });
+      return updated || application;
+    } catch (err) {
+      event('receipt.failed', { id: application.id, error: err instanceof MailError ? err.code : 'error' });
+      return application;
+    }
+  }
 
   const clientIp = (req) => {
     // Cloud Run appends the real client address as the last entry.
@@ -247,9 +282,15 @@ export async function createApp({ cfg, store, now = () => new Date(), verifyIdTo
     const application = newApplication(result.values, now().toISOString(), randomUUID());
     await store.create(application);
     event('application.submitted', { id: application.id });
-    // Tell the reviewers. The application is already saved, so nothing that
-    // happens in Slack can lose it or change what the applicant is told.
-    if (slack) await atMost(SLACK_WAIT_MS, slack.sync(application));
+    // Tell the applicant we have it, then tell the reviewers. The application
+    // is already saved, so nothing that happens in email or Slack can lose it
+    // or change what the applicant sees on the page.
+    if (mailer || slack) {
+      await atMost(NOTIFY_WAIT_MS, (async () => {
+        const current = await sendReceipt(application);
+        if (slack) await slack.sync(current);
+      })());
+    }
     return respond(200, { ok: true, message: THANKS }, { title: 'Application received', lines: [THANKS] });
   }
 
@@ -315,7 +356,14 @@ export async function createApp({ cfg, store, now = () => new Date(), verifyIdTo
   // links that open each email as a draft in this reviewer's own Gmail.
   const forReviewer = (app, admin) => {
     const drafts = draftUrls(app, { bookingUrl: cfg.callBookingUrl, authuser: admin });
-    return { ...app, call: callOf(app), emails: emailsOf(app), callInviteUrl: drafts.call, emailUrls: { welcome: drafts.welcome, decline: drafts.decline } };
+    return {
+      ...app,
+      receipt: receiptOf(app),
+      call: callOf(app),
+      emails: emailsOf(app),
+      callInviteUrl: drafts.call,
+      emailUrls: { welcome: drafts.welcome, decline: drafts.decline },
+    };
   };
 
   async function listApplications(req, res) {
@@ -439,6 +487,7 @@ export async function createApp({ cfg, store, now = () => new Date(), verifyIdTo
             integration: 'manual',
           },
           call: { bookingLinkSet: Boolean(cfg.callBookingUrl) },
+          receipt: { on: Boolean(mailer) },
         });
       }
 
