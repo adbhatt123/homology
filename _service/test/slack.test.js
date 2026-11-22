@@ -436,7 +436,7 @@ test('a reviewer can approve in Slack: recorded with who and when, and nobody is
   assert.match(said, /\*Approved\* by reviewer@example\.org/);
   assert.match(said, /Approving adds nobody to Slack/);
   assert.match(said, /Never use a shared invite link/);
-  assert.deepEqual(buttons(updates[0].args.blocks), ['link_invites', 'inv_sent', 'status_declined', 'status_pending', 'notes_edit', 'link_profile', 'link_review']);
+  assert.deepEqual(buttons(updates[0].args.blocks), ['link_welcome_email', 'email_welcome_sent', 'link_invites', 'inv_sent', 'status_declined', 'status_pending', 'notes_edit', 'link_profile', 'link_review']);
   const invites = updates[0].args.blocks.flatMap((b) => b.elements || []).find((e) => e.action_id === 'link_invites');
   assert.equal(invites.url, 'https://homologybio.slack.com/admin/invites');
 
@@ -454,7 +454,7 @@ test('declining, moving back and approving all work from Slack', async () => {
   let doc = await only(app);
   assert.equal(doc.status, 'declined');
   assert.equal(doc.review.by, SECOND_ADMIN);
-  assert.deepEqual(buttons(slack.of('chat.update').at(-1).args.blocks).slice(0, 2), ['status_approved', 'status_pending']);
+  assert.deepEqual(buttons(slack.of('chat.update').at(-1).args.blocks).slice(0, 4), ['link_decline_email', 'email_decline_sent', 'status_approved', 'status_pending']);
 
   await send(app, press('status_pending', id));
   doc = await only(app);
@@ -492,7 +492,8 @@ test('an invitation can only be recorded after approval, and then locks the deci
   assert.equal(doc.invitation.method, 'manual');
   assert.equal(doc.history.at(-1).via, 'slack');
   let latest = slack.of('chat.update').at(-1).args.blocks;
-  assert.deepEqual(buttons(latest).slice(0, 2), ['inv_joined', 'inv_clear']);
+  assert.deepEqual(buttons(latest).slice(0, 4), ['link_welcome_email', 'email_welcome_sent', 'inv_joined', 'inv_clear']);
+  assert.ok(!buttons(latest).some((id) => id.startsWith('status_')), 'no decision buttons while locked');
   assert.match(texts(latest, 'mrkdwn').join('\n'), /decision is locked/);
 
   // Locked: the decision cannot change while the invitation is on record.
@@ -729,7 +730,7 @@ test('a reviewer can move an application to a call from Slack and record the inv
   assert.match(said, /\*Approved\* by reviewer@example\.org/);
   assert.match(said, /\*Call invite:\* sent, recorded by reviewer@example\.org/);
   assert.match(said, /\*Slack invitation:\* not sent/);
-  assert.deepEqual(buttons(latest.blocks).slice(0, 4), ['link_invites', 'inv_sent', 'status_declined', 'status_pending']);
+  assert.deepEqual(buttons(latest.blocks).slice(0, 6), ['link_welcome_email', 'email_welcome_sent', 'link_invites', 'inv_sent', 'status_declined', 'status_pending']);
   await app.close();
 });
 
@@ -747,7 +748,7 @@ test('the call can be skipped or end in a decline, from Slack', async () => {
   await send(app, press('status_declined', b.id));
   const declined = await app.store.get(b.id);
   assert.equal(declined.status, 'declined');
-  assert.deepEqual(buttons(slack.of('chat.update').at(-1).args.blocks).slice(0, 2), ['status_approved', 'status_pending']);
+  assert.deepEqual(buttons(slack.of('chat.update').at(-1).args.blocks).slice(0, 4), ['link_decline_email', 'email_decline_sent', 'status_approved', 'status_pending']);
   await app.close();
 });
 
@@ -758,5 +759,111 @@ test('with a booking link set, the Slack draft carries it', async () => {
   await send(app, press('status_call', id));
   const draft = slack.of('chat.update').at(-1).args.blocks.flatMap((b) => b.elements || []).find((e) => e.action_id === 'link_call_invite');
   assert.match(new URL(draft.url).searchParams.get('body'), /pick a time here:\nhttps:\/\/cal\.example\.org\/homology\/intro\n/);
+  await app.close();
+});
+
+// ---------- the welcome and decline emails ----------
+
+const styles = (blocks) =>
+  Object.fromEntries(blocks.filter((b) => b.type === 'actions').flatMap((b) => b.elements).map((e) => [e.action_id, e.style || '']));
+const rows = (blocks) => blocks.filter((b) => b.type === 'actions').map((b) => b.block_id);
+const draftButton = (blocks, id) => new URL(blocks.flatMap((b) => b.elements || []).find((e) => e.action_id === id).url);
+
+test('after approving in Slack, the welcome email comes first and then the invitation', async () => {
+  const { app, slack } = await start();
+  await app.apply(valid());
+  const { id } = await only(app);
+
+  // No email can be recorded before a decision.
+  for (const action of ['email_welcome_sent', 'email_decline_sent']) await send(app, press(action, id));
+  assert.equal((await only(app)).emails.welcome.sentAt, null);
+  assert.match(slack.state.whispers.at(-1).text, /can only be recorded for a declined application/);
+
+  await send(app, press('status_approved', id));
+  let latest = slack.of('chat.update').at(-1).args.blocks;
+  assert.deepEqual(rows(latest), ['step', 'invite', 'decide', 'more']);
+  assert.deepEqual(buttons(latest), ['link_welcome_email', 'email_welcome_sent', 'link_invites', 'inv_sent', 'status_declined', 'status_pending', 'notes_edit', 'link_profile', 'link_review']);
+  assert.equal(styles(latest).email_welcome_sent, 'primary');
+  assert.equal(styles(latest).inv_sent, '', 'only one button stands out');
+  let said = texts(latest, 'mrkdwn').join('\n');
+  assert.match(said, /\*Welcome email:\* not sent/);
+  assert.ok(!said.includes('Decline email'));
+
+  const draft = draftButton(latest, 'link_welcome_email');
+  assert.equal(draft.origin + draft.pathname, 'https://mail.google.com/mail/');
+  assert.equal(draft.searchParams.get('to'), 'Test.Applicant@example.org');
+  assert.equal(draft.searchParams.get('su'), 'Welcome to Homology');
+  assert.equal(draft.searchParams.get('authuser'), null);
+  assert.equal((await send(app, press('link_welcome_email', id))).status, 200, 'opening the draft records nothing');
+  assert.equal((await only(app)).emails.welcome.sentAt, null);
+
+  // The wrong email for this decision, and someone who is not a reviewer.
+  await send(app, press('email_decline_sent', id));
+  await send(app, press('email_welcome_sent', id, { user: { id: MEMBER } }));
+  assert.deepEqual((await only(app)).emails, { welcome: { sentBy: null, sentAt: null }, decline: { sentBy: null, sentAt: null } });
+
+  app.clock.t += 60_000;
+  await send(app, press('email_welcome_sent', id, { user: { id: SECOND_REVIEWER } }));
+  const doc = await only(app);
+  assert.deepEqual(doc.emails.welcome, { sentBy: SECOND_ADMIN, sentAt: '2026-11-19T15:01:00.000Z' });
+  assert.deepEqual(doc.history.at(-1), { at: '2026-11-19T15:01:00.000Z', by: SECOND_ADMIN, action: 'email', kind: 'welcome', from: 'not_sent', to: 'sent', via: 'slack' });
+  assert.equal(doc.invitation.status, 'not_sent', 'a welcome email invites nobody');
+
+  latest = slack.of('chat.update').at(-1).args.blocks;
+  assert.deepEqual(rows(latest), ['invite', 'decide', 'more']);
+  assert.deepEqual(buttons(latest).slice(0, 4), ['link_invites', 'inv_sent', 'status_declined', 'status_pending']);
+  assert.equal(styles(latest).inv_sent, 'primary', 'now the invitation is the next step');
+  assert.match(texts(latest, 'mrkdwn').join('\n'), /\*Welcome email:\* sent, recorded by second\.reviewer@example\.org/);
+
+  await send(app, press('email_welcome_sent', id));
+  assert.match(slack.state.whispers.at(-1).text, /already on record/);
+  await app.close();
+});
+
+test('after declining in Slack, the decline email is the one step left', async () => {
+  const { app, slack } = await start();
+  await app.apply(valid());
+  const { id } = await only(app);
+  await send(app, press('status_declined', id));
+  let latest = slack.of('chat.update').at(-1).args.blocks;
+  assert.deepEqual(rows(latest), ['step', 'decide', 'more']);
+  assert.deepEqual(buttons(latest).slice(0, 4), ['link_decline_email', 'email_decline_sent', 'status_approved', 'status_pending']);
+  assert.equal(styles(latest).email_decline_sent, 'primary');
+  assert.equal(draftButton(latest, 'link_decline_email').searchParams.get('su'), 'Your Homology application');
+  let said = texts(latest, 'mrkdwn').join('\n');
+  assert.match(said, /\*Decline email:\* not sent/);
+  assert.ok(!said.includes('Welcome email') && !said.includes('Slack invitation'));
+
+  await send(app, press('email_decline_sent', id));
+  assert.equal((await only(app)).emails.decline.sentBy, ADMIN);
+  latest = slack.of('chat.update').at(-1).args.blocks;
+  assert.deepEqual(rows(latest), ['decide', 'more']);
+  assert.deepEqual(buttons(latest).slice(0, 2), ['status_approved', 'status_pending']);
+
+  // A change of heart: the decline email still went out, and the message keeps saying so.
+  await send(app, press('status_approved', id));
+  latest = slack.of('chat.update').at(-1).args.blocks;
+  said = texts(latest, 'mrkdwn').join('\n');
+  assert.match(said, /\*Decline email:\* sent, recorded by reviewer@example\.org/);
+  assert.match(said, /\*Welcome email:\* not sent/);
+  assert.deepEqual(buttons(latest).slice(0, 2), ['link_welcome_email', 'email_welcome_sent']);
+  await app.close();
+});
+
+test('an email recorded in the review view shows up in Slack', async () => {
+  const { app, slack } = await start();
+  await app.apply(valid());
+  const { id } = await only(app);
+  const cookie = app.cookieFor(ADMIN);
+  await app.call('POST', `/api/applications/${id}/status`, { cookie, body: { status: 'approved' } });
+  await app.call('POST', `/api/applications/${id}/email`, { cookie, body: { kind: 'welcome', action: 'sent' } });
+  let said = texts(slack.of('chat.update').at(-1).args.blocks, 'mrkdwn').join('\n');
+  assert.match(said, /\*Welcome email:\* sent, recorded by reviewer@example\.org/);
+  assert.equal((await only(app)).history.at(-1).via, undefined);
+
+  // Cleared in the review view: Slack offers the step again.
+  await app.call('POST', `/api/applications/${id}/email`, { cookie, body: { kind: 'welcome', action: 'clear' } });
+  const latest = slack.of('chat.update').at(-1).args.blocks;
+  assert.deepEqual(buttons(latest).slice(0, 2), ['link_welcome_email', 'email_welcome_sent']);
   await app.close();
 });

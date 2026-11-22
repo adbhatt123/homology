@@ -142,6 +142,9 @@
   const callInvite = (app, action) =>
     act(async () => replace((await api('POST', `/api/applications/${app.id}/call`, { action })).application));
 
+  const decisionEmail = (app, kind, action) =>
+    act(async () => replace((await api('POST', `/api/applications/${app.id}/email`, { kind, action })).application));
+
   // Only ever open a draft in Gmail.
   function safeDraftUrl(value) {
     try {
@@ -341,7 +344,7 @@
       left,
       h('div', {},
         state.error ? h('p', { class: 'message', role: 'alert' }, state.error) : null,
-        decisionPanel(app), callPanel(app), notesPanel(app), invitationPanel(app)),
+        decisionPanel(app), callPanel(app), notesPanel(app), emailPanel(app, 'decline'), emailPanel(app, 'welcome'), invitationPanel(app)),
     );
   }
 
@@ -373,7 +376,7 @@
                   app.status === 'pending' ? 'Approve without a call' : 'Approve',
                   'approved',
                   // One step stands out at a time: at the call stage that is the invite, until it has gone out.
-                  app.status === 'declined' || (app.status === 'call' && Boolean(app.call.inviteSentAt)))
+                  app.status === 'call' && Boolean(app.call.inviteSentAt))
               : null,
             app.status !== 'declined' ? button('Decline', 'declined', false) : null,
             app.status !== 'pending' ? button('Move back to pending', 'pending', false) : null),
@@ -426,6 +429,67 @@
       );
     }
     return h('section', { class: 'panel' }, h('h3', {}, 'Intro call'), body);
+  }
+
+  // The email that follows a decision: a welcome after an approval, a short
+  // note after a decline. The reviewer sends it from their own inbox, then
+  // records it here. If the decision changes afterwards the record stays,
+  // because the email did go out.
+  const DECISION_EMAILS = {
+    welcome: {
+      title: 'Welcome email',
+      status: 'approved',
+      write: 'Write the welcome email in Gmail',
+      record: 'Record welcome email sent',
+      hint: 'It tells them a Slack invitation follows, so send it before or right after you invite them.',
+    },
+    decline: {
+      title: 'Decline email',
+      status: 'declined',
+      write: 'Write the decline email in Gmail',
+      record: 'Record decline email sent',
+      hint: 'It is short and gives no reason. Add one in the draft if you want to.',
+    },
+  };
+
+  function emailPanel(app, kind) {
+    const spec = DECISION_EMAILS[kind];
+    const email = app.emails[kind];
+    const current = app.status === spec.status;
+    if (!current && !email.sentAt) return null;
+    const button = (label, action, primary) =>
+      h('button', {
+        type: 'button',
+        class: `btn${primary ? ' primary' : ''}`,
+        'data-focus': `email-${kind}-${action}-${app.id}`,
+        disabled: state.busy,
+        onclick: () => decisionEmail(app, kind, action),
+      }, label);
+    const body = [];
+
+    if (email.sentAt) {
+      body.push(
+        h('div', { class: 'state' }, h('span', { class: 'chip' }, 'Sent')),
+        h('p', { class: 'meta' }, `Recorded by ${email.sentBy} on ${fmt(email.sentAt)}.`),
+        current ? null : h('p', { class: 'meta' }, 'This went out before the decision changed.'),
+        h('div', { class: 'actions' }, button('Clear record', 'clear', false)),
+      );
+    } else {
+      const draft = safeDraftUrl(app.emailUrls && app.emailUrls[kind]);
+      body.push(
+        h('div', { class: 'state' }, h('span', { class: 'chip quiet' }, 'Not sent')),
+        h('ol', { class: 'steps' },
+          h('li', {},
+            draft
+              ? h('a', { href: draft, target: '_blank', rel: 'noopener noreferrer', 'data-focus': `email-${kind}-draft-${app.id}` }, spec.write)
+              : 'Write a short email',
+            ' to ', h('span', { class: 'address' }, app.answers.email), '. It opens as a draft you can edit before sending.'),
+          h('li', {}, 'Come back and record it, so the other reviewers know.')),
+        h('p', { class: 'meta' }, spec.hint),
+        h('div', { class: 'actions' }, button(spec.record, 'sent', true)),
+      );
+    }
+    return h('section', { class: 'panel' }, h('h3', {}, spec.title), body);
   }
 
   function notesPanel(app) {
@@ -485,7 +549,8 @@
           h('li', {}, 'Invite this one address as a member: ', h('span', { class: 'address' }, app.answers.email), copyBtn),
           h('li', {}, 'Come back and record it, so the other reviewers know.')),
         h('p', { class: 'meta' }, 'Do not send a shared invite link. Each approved applicant gets an individual invitation.'),
-        h('div', { class: 'actions' }, button('Record invitation sent', 'sent', true)),
+        // One step stands out at a time: the welcome email first, then the invitation.
+        h('div', { class: 'actions' }, button('Record invitation sent', 'sent', Boolean(app.emails.welcome.sentAt))),
       );
     } else if (inv.status === 'sent') {
       body.push(
@@ -510,6 +575,7 @@
       if (e.action === 'status') return `${e.by} changed the decision from ${state.labels[e.from].toLowerCase()} to ${state.labels[e.to].toLowerCase()}`;
       if (e.action === 'invitation') return `${e.by} changed the invitation record from ${INVITATION_LABELS[e.from].toLowerCase()} to ${INVITATION_LABELS[e.to].toLowerCase()}`;
       if (e.action === 'call_invite') return e.to === 'sent' ? `${e.by} recorded the call invite as sent` : `${e.by} cleared the call invite record`;
+      if (e.action === 'email') return e.to === 'sent' ? `${e.by} recorded the ${e.kind} email as sent` : `${e.by} cleared the ${e.kind} email record`;
       return e.action;
     };
     return h('details', { class: 'history' },

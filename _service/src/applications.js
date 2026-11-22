@@ -7,7 +7,9 @@
 //                      "call", invites the applicant to a short call by email,
 //                      and records that the invite went out
 //   3. approval        an admin decision, recorded with who and when. It can
-//                      follow a call or skip it
+//                      follow a call or skip it. After deciding, a reviewer
+//                      emails the applicant a welcome or a decline note and
+//                      records that it went out
 //   4. invitation      a later, explicit admin step that is only possible once
 //                      the application is approved
 //
@@ -32,6 +34,14 @@ const noCallInvite = () => ({ inviteSentBy: null, inviteSentAt: null });
 // The call invite record, also for applications saved before the call stage existed.
 export const callOf = (app) => app.call || noCallInvite();
 
+// The email that follows a decision, and the decision it belongs to.
+export const DECISION_EMAIL_STATUS = { welcome: 'approved', decline: 'declined' };
+const noEmail = () => ({ sentBy: null, sentAt: null });
+const noEmails = () => ({ welcome: noEmail(), decline: noEmail() });
+
+// The record of those emails, also for applications saved before it existed.
+export const emailsOf = (app) => ({ ...noEmails(), ...(app.emails || {}) });
+
 export function newApplication(values, nowIso, id) {
   return {
     id,
@@ -43,6 +53,7 @@ export function newApplication(values, nowIso, id) {
     review: null,
     notes: { text: '', updatedBy: null, updatedAt: null },
     call: noCallInvite(),
+    emails: noEmails(),
     invitation: {
       status: 'not_sent',
       method: null,
@@ -108,6 +119,47 @@ export function recordCallInvite(app, action, admin, nowIso) {
     }
     app.history.push({ at: nowIso, by: admin, action: 'call_invite', from: 'not_sent', to: 'sent' });
     app.call = { inviteSentBy: admin, inviteSentAt: nowIso };
+    return app;
+  }
+
+  throw new DomainError('invalid_action', 'Action must be sent or clear.');
+}
+
+// The welcome that follows an approval and the note that follows a decline.
+// A reviewer sends it from their own inbox, then records it here.
+// kind:   "welcome" only for an approved application
+//         "decline" only for a declined one
+// action: "sent" or "clear"
+// A record stays if the decision later changes, because the email did go out.
+export function recordDecisionEmail(app, kind, action, admin, nowIso) {
+  if (!Object.hasOwn(DECISION_EMAIL_STATUS, kind)) {
+    throw new DomainError('invalid_email', 'Email must be welcome or decline.');
+  }
+  const emails = emailsOf(app);
+
+  if (action === 'clear') {
+    if (!emails[kind].sentAt) return app;
+    app.history.push({ at: nowIso, by: admin, action: 'email', kind, from: 'sent', to: 'not_sent' });
+    app.emails = { ...emails, [kind]: noEmail() };
+    return app;
+  }
+
+  if (action === 'sent') {
+    const needed = DECISION_EMAIL_STATUS[kind];
+    if (app.status !== needed) {
+      throw new DomainError(
+        'wrong_status',
+        kind === 'welcome'
+          ? 'A welcome email can only be recorded for an approved application.'
+          : 'A decline email can only be recorded for a declined application.',
+        409,
+      );
+    }
+    if (emails[kind].sentAt) {
+      throw new DomainError('already_recorded', `A ${kind} email is already on record for this applicant.`, 409);
+    }
+    app.history.push({ at: nowIso, by: admin, action: 'email', kind, from: 'not_sent', to: 'sent' });
+    app.emails = { ...emails, [kind]: { sentBy: admin, sentAt: nowIso } };
     return app;
   }
 

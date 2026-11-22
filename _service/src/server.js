@@ -22,14 +22,16 @@ import { validateApplication, clean } from './validate.js';
 import {
   DomainError,
   callOf,
+  emailsOf,
   newApplication,
   recordCallInvite,
+  recordDecisionEmail,
   recordInvitation,
   setNotes,
   setStatus,
   STATUS_LABELS,
 } from './applications.js';
-import { callInviteEmail, gmailDraftUrl } from './emails.js';
+import { draftUrls } from './emails.js';
 import { MemoryStore, FirestoreStore } from './store.js';
 import {
   AuthError,
@@ -309,13 +311,12 @@ export async function createApp({ cfg, store, now = () => new Date(), verifyIdTo
     startSession(res, address);
   }
 
-  // What the review page gets for one application: the saved record, plus a
-  // link that opens the call invite as a draft in this reviewer's own Gmail.
-  const forReviewer = (app, admin) => ({
-    ...app,
-    call: callOf(app),
-    callInviteUrl: gmailDraftUrl(callInviteEmail(app, { bookingUrl: cfg.callBookingUrl }), { authuser: admin }),
-  });
+  // What the review page gets for one application: the saved record, plus
+  // links that open each email as a draft in this reviewer's own Gmail.
+  const forReviewer = (app, admin) => {
+    const drafts = draftUrls(app, { bookingUrl: cfg.callBookingUrl, authuser: admin });
+    return { ...app, call: callOf(app), emails: emailsOf(app), callInviteUrl: drafts.call, emailUrls: { welcome: drafts.welcome, decline: drafts.decline } };
+  };
 
   async function listApplications(req, res) {
     const admin = requireAdmin(req);
@@ -384,6 +385,15 @@ export async function createApp({ cfg, store, now = () => new Date(), verifyIdTo
         if (callOf(next).inviteSentAt !== before) {
           event('application.call_invite', { id, by: admin, to: callOf(next).inviteSentAt ? 'sent' : 'not_sent' });
         }
+        return next;
+      })],
+    ['POST', /^\/api\/applications\/([0-9a-f-]{36})\/email$/, (req, res, [id]) =>
+      change(req, res, id, (doc, body, admin, t) => {
+        const kind = String(body.kind || '');
+        const before = emailsOf(doc)[kind]?.sentAt;
+        const next = recordDecisionEmail(doc, kind, body.action, admin, t);
+        const after = emailsOf(next)[kind].sentAt;
+        if (after !== before) event('application.email', { id, by: admin, kind, to: after ? 'sent' : 'not_sent' });
         return next;
       })],
     ['POST', /^\/api\/applications\/([0-9a-f-]{36})\/invitation$/, (req, res, [id]) =>

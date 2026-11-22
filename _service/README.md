@@ -15,12 +15,14 @@ The folder name starts with an underscore so GitHub Pages leaves it out of the p
 | Apply | Anyone | One record is stored with status `pending` | No Slack access, no email, no sign-in |
 | Call (optional) | A reviewer | Status becomes `call`. The reviewer emails the applicant an invite to a short intro call from their own inbox, then records that it went out | Nothing is decided and nobody is invited |
 | Decide | A reviewer | Status becomes `approved` or `declined`, with who and when. This can follow a call or skip it | Nobody is invited |
+| Tell them | A reviewer | The reviewer sends a welcome or a decline email from their own inbox, then records that it went out | Nobody is invited. The welcome email holds no link |
 | Invite | A reviewer, only after approval | The reviewer invites that one email address in Slack by hand, then records it here | No shared invite link is ever used |
 
 Rules the server enforces (see `src/applications.js`, covered by `test/flow.test.js`):
 
 - A new application is always `pending`. Anything else an applicant sends is ignored.
 - A call invite can only be recorded while the application is at the `call` stage. A call, however it goes, grants nothing.
+- A welcome email can only be recorded for an `approved` application, and a decline email for a `declined` one. If the decision changes later the record stays, because the email did go out.
 - An invitation can only be recorded while the application is `approved`.
 - While an invitation is on record, the decision cannot be changed. Revoke the invitation in Slack and clear the record first.
 - Every decision, note edit and invitation record is stored with the reviewer's email and the time, in the application's history.
@@ -45,6 +47,15 @@ CALL_BOOKING_URL: "https://cal.com/your-name/intro"
 
 Nothing else changes: the draft then says "You can pick a time here:" followed by the link, in both the review view and Slack.
 
+### Welcome and decline emails
+
+After a decision the review view and the Slack message offer one more step, the same way as the call invite: a link opens a ready-to-send draft in the reviewer's own Gmail, and a button records that it went out. This service never sends email.
+
+- **Welcome**, after an approval. It says they are in and that a Slack invitation follows at the same address. Send it before or right after the invitation, since the invitation itself comes from Slack and says nothing about Homology.
+- **Decline**, after a decline. It is short and gives no reason, because the service cannot know the real one. Add one in the draft if you want to.
+
+The wording of all three emails is in `src/emails.js`. A record made by mistake is cleared in the review view.
+
 ### Slack invitations
 
 Slack only offers an API for sending workspace invitations on Enterprise Grid, so this service does not send them. After approval the review view shows a manual step: open `https://homologybio.slack.com/admin/invites`, invite the applicant's email as a member, then press "Record invitation sent". Nothing in this service can invite anyone to Slack, with or without the Slack review below.
@@ -53,7 +64,7 @@ Slack only offers an API for sending workspace invitations on Enterprise Grid, s
 
 ## Review in Slack
 
-When the Slack settings are present, each new application is posted to one private channel, and reviewers can press Move to call, Approve, Decline, Move back to pending, Record call invite sent, Record invitation sent, Mark as joined, Clear invitation record and Add note there. A decision made in Slack and one made in the review view are the same thing: same rules, same record of who and when (Slack changes are marked `via: slack` in the history), and the Slack message is redrawn after every change from either place.
+When the Slack settings are present, each new application is posted to one private channel, and reviewers can press Move to call, Approve, Decline, Move back to pending, Record call invite sent, Record welcome email sent, Record decline email sent, Record invitation sent, Mark as joined, Clear invitation record and Add note there. A decision made in Slack and one made in the review view are the same thing: same rules, same record of who and when (Slack changes are marked `via: slack` in the history), and the Slack message is redrawn after every change from either place.
 
 What keeps this private and safe (see `src/slack.js`, covered by `test/slack.test.js`):
 
@@ -191,7 +202,7 @@ Production runs in the Google Cloud project `homology-bio`, at `https://homology
 
 ## What this does not do
 
-- It does not email applicants. "We will email you with next steps" is a promise the reviewers keep by hand. For the intro call it writes the draft, and a reviewer sends it.
+- It does not email applicants. "We will email you with next steps" is a promise the reviewers keep by hand. For the intro call, the welcome and the decline it writes the draft, and a reviewer sends it.
 - It does not schedule calls or know whether one happened. The booking link, once set, is only text in the invite.
 - It does not notify reviewers of new applications unless Slack review is set up. Without it, open `/review` to see what is pending.
 - It does not send Slack invitations, with or without Slack review.

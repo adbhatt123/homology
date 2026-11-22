@@ -6,9 +6,10 @@
 // privacy setting and member list. It has no way to invite anyone to the
 // workspace, so the invitation stays a manual step that a reviewer records.
 //
-// A reviewer can also move an application to an intro call from here. The
-// call invite is an email the reviewer sends from their own inbox: the button
-// only opens the draft.
+// A reviewer can also move an application to an intro call from here, and
+// record the welcome or decline email that follows a decision. Those are
+// emails the reviewer sends from their own inbox: a button only opens the
+// draft. A record made by mistake is cleared in the review view.
 //
 // Three checks stand between a button press and a change:
 //   1. Slack's signature on the request, so it really came from Slack
@@ -23,12 +24,14 @@ import {
   DomainError,
   STATUS_LABELS,
   callOf,
+  emailsOf,
   recordCallInvite,
+  recordDecisionEmail,
   recordInvitation,
   setNotes,
   setStatus,
 } from './applications.js';
-import { callInviteEmail, gmailDraftUrl } from './emails.js';
+import { draftUrls } from './emails.js';
 import { normalizeLinkedin } from './validate.js';
 
 const API = 'https://slack.com/api';
@@ -111,10 +114,20 @@ function decisionLine(app) {
 function callLine(app) {
   const call = callOf(app);
   if (!call.inviteSentAt) {
-    return '*Call invite:* not sent. Write it from the button below, send it from your own inbox, then record it here.';
+    return `*Call invite:* ${NOT_SENT}`;
   }
   const sent = `*Call invite:* sent, recorded by ${escapeMarkup(call.inviteSentBy)}, ${when(call.inviteSentAt)}.`;
   return app.status === 'call' ? `${sent} After the call, add what you learned as a note, then approve or decline.` : sent;
+}
+
+const NOT_SENT = 'not sent. Write it from the button below, send it from your own inbox, then record it here.';
+
+function emailLine(app, kind) {
+  const name = kind === 'welcome' ? 'Welcome email' : 'Decline email';
+  const email = emailsOf(app)[kind];
+  return email.sentAt
+    ? `*${name}:* sent, recorded by ${escapeMarkup(email.sentBy)}, ${when(email.sentAt)}.`
+    : `*${name}:* ${NOT_SENT}`;
 }
 
 function invitationLine(app) {
@@ -128,10 +141,12 @@ function invitationLine(app) {
   return '*Slack invitation:* not sent. Approving adds nobody to Slack. Open Slack invitations, invite the email address above as a member, then record it here. Never use a shared invite link.';
 }
 
-export function applicationMessage(app, { reviewUrl, invitesUrl, callInviteUrl = '' }) {
+// `drafts` holds the Gmail draft links: { call, welcome, decline }.
+export function applicationMessage(app, { reviewUrl, invitesUrl, drafts = {} }) {
   const a = app.answers;
   const inv = app.invitation;
   const call = callOf(app);
+  const emails = emailsOf(app);
   const locked = inv.status !== 'not_sent';
 
   const blocks = [
@@ -154,7 +169,10 @@ export function applicationMessage(app, { reviewUrl, invitesUrl, callInviteUrl =
     { type: 'section', text: markup(decisionLine(app)) },
   ];
 
+  // An email that went out stays on the message even if the decision later changes.
   if (app.status === 'call' || call.inviteSentAt) blocks.push({ type: 'section', text: markup(callLine(app)) });
+  if (app.status === 'declined' || emails.decline.sentAt) blocks.push({ type: 'section', text: markup(emailLine(app, 'decline')) });
+  if (app.status === 'approved' || emails.welcome.sentAt) blocks.push({ type: 'section', text: markup(emailLine(app, 'welcome')) });
   if (app.status === 'approved' || locked) blocks.push({ type: 'section', text: markup(invitationLine(app)) });
 
   if (app.notes.text) {
@@ -168,24 +186,40 @@ export function applicationMessage(app, { reviewUrl, invitesUrl, callInviteUrl =
     );
   }
 
-  const decide = [];
+  // Three rows of buttons, each shown only when it has something to offer:
+  //   step     the email that belongs to this stage, until it is recorded
+  //   invite   the manual Slack invitation, once approved
+  //   decide   the decision itself
+  // One button stands out at a time: the next thing to do.
+  const step = [];
+  const emailStep = (write, draft, linkId, record, actionId) => {
+    if (drafts[draft]) step.push(linkButton(write, linkId, drafts[draft]));
+    step.push(button(record, actionId, app.id, 'primary'));
+  };
+  const atCall = app.status === 'call';
+  if (atCall && !call.inviteSentAt) emailStep('Write call invite', 'call', 'link_call_invite', 'Record call invite sent', 'call_sent');
+  if (app.status === 'approved' && !emails.welcome.sentAt) {
+    emailStep('Write welcome email', 'welcome', 'link_welcome_email', 'Record welcome email sent', 'email_welcome_sent');
+  }
+  if (app.status === 'declined' && !emails.decline.sentAt) {
+    emailStep('Write decline email', 'decline', 'link_decline_email', 'Record decline email sent', 'email_decline_sent');
+  }
+  const next = step.length ? undefined : 'primary';
+
+  const invite = [];
   if (inv.status === 'sent') {
-    decide.push(button('Mark as joined', 'inv_joined', app.id, 'primary'), button('Clear invitation record', 'inv_clear', app.id));
+    invite.push(button('Mark as joined', 'inv_joined', app.id, next), button('Clear invitation record', 'inv_clear', app.id));
   } else if (inv.status === 'joined') {
-    decide.push(button('Clear invitation record', 'inv_clear', app.id));
-  } else {
-    if (app.status === 'approved') {
-      decide.push(
-        linkButton('Open Slack invitations', 'link_invites', invitesUrl),
-        button('Record invitation sent', 'inv_sent', app.id, 'primary'),
-      );
-    }
-    // One step stands out at each stage: move to a call, send the call invite, then decide.
-    const atCall = app.status === 'call';
-    if (atCall && !call.inviteSentAt) {
-      if (callInviteUrl) decide.push(linkButton('Write call invite', 'link_call_invite', callInviteUrl));
-      decide.push(button('Record call invite sent', 'call_sent', app.id, 'primary'));
-    }
+    invite.push(button('Clear invitation record', 'inv_clear', app.id));
+  } else if (app.status === 'approved') {
+    invite.push(
+      linkButton('Open Slack invitations', 'link_invites', invitesUrl),
+      button('Record invitation sent', 'inv_sent', app.id, next),
+    );
+  }
+
+  const decide = [];
+  if (!locked) {
     if (app.status === 'pending') decide.push(button('Move to call', 'status_call', app.id, 'primary'));
     if (app.status !== 'approved') {
       decide.push(
@@ -207,7 +241,9 @@ export function applicationMessage(app, { reviewUrl, invitesUrl, callInviteUrl =
   if (profile) more.push(linkButton('LinkedIn profile', 'link_profile', profile));
   more.push(linkButton('Open in review view', 'link_review', reviewUrl));
 
-  blocks.push({ type: 'actions', block_id: 'decide', elements: decide }, { type: 'actions', block_id: 'more', elements: more });
+  for (const [id, elements] of [['step', step], ['invite', invite], ['decide', decide], ['more', more]]) {
+    if (elements.length) blocks.push({ type: 'actions', block_id: id, elements });
+  }
 
   // The line phones show in a notification. It names nobody.
   const text = app.status === 'pending' && !app.review ? 'New Homology application' : `Homology application: ${STATUS_LABELS[app.status].toLowerCase()}`;
@@ -270,14 +306,14 @@ export function createSlackReview({ cfg, store, now, event, fetchImpl = fetch })
   const links = { reviewUrl: `${cfg.serviceUrl}/review`, invitesUrl: `${cfg.slackWorkspaceUrl}/admin/invites` };
   let botUserId = null;
 
-  // The call invite as a Gmail draft. Slack caps how long a button's link can
-  // be, so a draft that would not fit opens with the address and subject only.
-  const callInviteUrl = (app) => {
-    const email = callInviteEmail(app, { bookingUrl: cfg.callBookingUrl });
-    const full = gmailDraftUrl(email);
-    return full.length <= BUTTON_URL_LIMIT ? full : gmailDraftUrl({ ...email, body: '' });
-  };
-  const draw = (app) => applicationMessage(app, { ...links, callInviteUrl: callInviteUrl(app) });
+  // The emails as Gmail drafts. Slack caps how long a button's link can be,
+  // so a draft that would not fit opens with the address and subject only.
+  // The message is shared by every reviewer, so the links name no Google account.
+  const draw = (app) =>
+    applicationMessage(app, {
+      ...links,
+      drafts: draftUrls(app, { bookingUrl: cfg.callBookingUrl, maxLength: BUTTON_URL_LIMIT }),
+    });
 
   async function api(method, args) {
     const body = new URLSearchParams();
@@ -417,10 +453,19 @@ export function createSlackReview({ cfg, store, now, event, fetchImpl = fetch })
     return fromSlack(next, before);
   };
 
+  const decisionEmail = (kind) => (doc, by, t) => {
+    const before = doc.history.length;
+    const next = recordDecisionEmail(doc, kind, 'sent', by, t);
+    event('application.email', { id: doc.id, by, kind, to: 'sent', via: 'slack' });
+    return fromSlack(next, before);
+  };
+
   const CHANGES = {
     status_call: decide('call'),
     call_sent: callInvite('sent'),
     call_clear: callInvite('clear'),
+    email_welcome_sent: decisionEmail('welcome'),
+    email_decline_sent: decisionEmail('decline'),
     status_approved: decide('approved'),
     status_declined: decide('declined'),
     status_pending: decide('pending'),
