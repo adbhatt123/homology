@@ -3,7 +3,9 @@
 // Public:   POST /api/apply            store one application as "pending" and,
 //                                      when switched on, email the applicant a
 //                                      short receipt
-// Private:  /review and /api/...       sign-in required, allowlisted admins only
+// Private:  /review and /api/...       sign-in required, allowlisted admins only.
+//                                      Applications, and the introductions
+//                                      reviewers make between approved members
 //
 // Optional: POST /api/slack/interactions   reviewers' button presses in Slack
 //
@@ -36,6 +38,7 @@ import {
   STATUS_LABELS,
 } from './applications.js';
 import { draftUrls, receiptEmail } from './emails.js';
+import { INTRO_STATUS_LABELS, assertMember, newIntroduction, setIntroReason, setIntroStatus } from './introductions.js';
 import { MailError, createMailer } from './mailer.js';
 import { MemoryStore, FirestoreStore } from './store.js';
 import {
@@ -146,7 +149,16 @@ async function readJson(req) {
   }
 }
 
-export async function createApp({ cfg, store, now = () => new Date(), verifyIdToken, log = console, slackFetch = fetch, mailFetch = fetch }) {
+export async function createApp({
+  cfg,
+  store,
+  introStore = new MemoryStore(),
+  now = () => new Date(),
+  verifyIdToken,
+  log = console,
+  slackFetch = fetch,
+  mailFetch = fetch,
+}) {
   const assets = {
     '/review': { type: 'text/html; charset=utf-8', body: await readFile(join(PUBLIC_DIR, 'review.html')) },
     '/review.css': { type: 'text/css; charset=utf-8', body: await readFile(join(PUBLIC_DIR, 'review.css')) },
@@ -388,6 +400,37 @@ export async function createApp({ cfg, store, now = () => new Date(), verifyIdTo
     send(res, 200, { application: forReviewer(updated, admin) });
   }
 
+  // ---------- introductions between members ----------
+
+  async function listIntroductions(req, res) {
+    requireAdmin(req);
+    const all = (await introStore.list()).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    send(res, 200, { introductions: all, statusLabels: INTRO_STATUS_LABELS });
+  }
+
+  async function createIntroduction(req, res) {
+    const admin = requireAdmin(req);
+    guardWrite(req);
+    const body = await readJson(req);
+    const intro = newIntroduction(body, admin, now().toISOString(), randomUUID());
+    // Both people must be members right now. Someone outside Homology is a name only.
+    assertMember(await store.get(intro.forId));
+    if (intro.withId) assertMember(await store.get(intro.withId));
+    await introStore.create(intro);
+    event('introduction.created', { id: intro.id, by: admin, to: intro.status });
+    send(res, 200, { introduction: intro });
+  }
+
+  async function changeIntroduction(req, res, id, apply) {
+    const admin = requireAdmin(req);
+    guardWrite(req);
+    const body = await readJson(req);
+    const nowIso = now().toISOString();
+    const updated = await introStore.update(id, (doc) => apply(doc, body, admin, nowIso));
+    if (!updated) throw new HttpError(404, 'not_found');
+    send(res, 200, { introduction: updated });
+  }
+
   // ---------- reviewers' button presses in Slack ----------
 
   async function slackInteraction(req, res) {
@@ -417,6 +460,17 @@ export async function createApp({ cfg, store, now = () => new Date(), verifyIdTo
       send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie('', { secure: cfg.production, maxAgeS: 0 }) });
     }],
     ['GET', /^\/api\/applications$/, (req, res) => listApplications(req, res)],
+    ['GET', /^\/api\/introductions$/, (req, res) => listIntroductions(req, res)],
+    ['POST', /^\/api\/introductions$/, (req, res) => createIntroduction(req, res)],
+    ['POST', /^\/api\/introductions\/([0-9a-f-]{36})\/status$/, (req, res, [id]) =>
+      changeIntroduction(req, res, id, (doc, body, admin, t) => {
+        const before = doc.status;
+        const next = setIntroStatus(doc, body.status, admin, t);
+        if (next.status !== before) event('introduction.status', { id, by: admin, from: before, to: next.status });
+        return next;
+      })],
+    ['POST', /^\/api\/introductions\/([0-9a-f-]{36})\/reason$/, (req, res, [id]) =>
+      changeIntroduction(req, res, id, (doc, body, admin, t) => setIntroReason(doc, body.text, admin, t))],
     ['POST', /^\/api\/applications\/([0-9a-f-]{36})\/status$/, (req, res, [id]) =>
       change(req, res, id, (doc, body, admin, t) => {
         const before = doc.status;
@@ -519,8 +573,16 @@ export async function main(env = process.env) {
           projectId: cfg.projectId,
         })
       : new MemoryStore({ file: cfg.dataFile });
+  const introStore =
+    cfg.store === 'firestore'
+      ? await FirestoreStore.connect({
+          database: cfg.firestoreDatabase,
+          collection: cfg.firestoreIntroCollection,
+          projectId: cfg.projectId,
+        })
+      : new MemoryStore({ file: cfg.dataFile ? cfg.dataFile.replace(/(\.json)?$/, '.introductions.json') : '' });
   const verifyIdToken = createIdTokenVerifier({ clientId: cfg.googleClientId, getKeys: googleKeySource() });
-  const handler = await createApp({ cfg, store, verifyIdToken });
+  const handler = await createApp({ cfg, store, introStore, verifyIdToken });
   createServer(handler).listen(cfg.port, () => {
     console.info(JSON.stringify({ event: 'listening', port: cfg.port, store: cfg.store, production: cfg.production }));
   });

@@ -31,6 +31,7 @@ export async function boot(envOver = {}, { identities = {}, slackFetch, mailFetc
   });
   if (problems.length) throw new Error(problems.join(' '));
   const store = new MemoryStore();
+  const intros = new MemoryStore();
   const clock = { t: Date.parse('2026-11-19T15:00:00.000Z') };
   const now = () => new Date(clock.t);
   const logs = [];
@@ -51,7 +52,7 @@ export async function boot(envOver = {}, { identities = {}, slackFetch, mailFetc
   const noMail = async () => {
     throw new Error('unexpected call to the mail service');
   };
-  const handler = await createApp({ cfg, store, now, verifyIdToken, log, slackFetch: slackFetch || noSlack, mailFetch: mailFetch || noMail });
+  const handler = await createApp({ cfg, store, introStore: intros, now, verifyIdToken, log, slackFetch: slackFetch || noSlack, mailFetch: mailFetch || noMail });
   const server = createServer(handler);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   // A test that fails before it closes its server must not keep the whole run waiting.
@@ -81,5 +82,5 @@ export async function boot(envOver = {}, { identities = {}, slackFetch, mailFetc
       body: JSON.stringify(data),
     });
 
-  return { cfg, store, clock, logs, base, call, apply, cookieFor, close: () => new Promise((r) => server.close(r)) };
+  return { cfg, store, intros, clock, logs, base, call, apply, cookieFor, close: () => new Promise((r) => server.close(r)) };
 }

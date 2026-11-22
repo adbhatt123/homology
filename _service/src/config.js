@@ -71,6 +71,8 @@ export function loadConfig(env = process.env) {
     store: env.STORE || (production ? 'firestore' : 'memory'),
     firestoreDatabase: env.FIRESTORE_DATABASE || '(default)',
     firestoreCollection: env.FIRESTORE_COLLECTION || 'applications',
+    // Introductions between members live beside the applications, in the same private database.
+    firestoreIntroCollection: env.FIRESTORE_INTRO_COLLECTION || 'introductions',
     projectId: env.GOOGLE_CLOUD_PROJECT || '',
     dataFile: env.DATA_FILE || '',
 

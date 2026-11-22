@@ -3,7 +3,7 @@
 The public site (`index.html`, served by GitHub Pages) is a static page and cannot keep anything private. This small service does the two things the page cannot:
 
 1. **Receives applications** from the form on homology.bio and stores them privately as "Pending review".
-2. **Serves the review view** at `/review`, where authorized reviewers read applications, decide, keep private notes and record Slack invitations.
+2. **Serves the review view** at `/review`, where authorized reviewers read applications, decide, keep private notes and record Slack invitations. Its Introductions tab tracks who has been introduced to whom.
 3. **Optionally posts each application to the reviewers' private Slack channel**, where the same reviewers can decide with buttons. See "Review in Slack" below.
 
 The folder name starts with an underscore so GitHub Pages leaves it out of the published site.
@@ -95,6 +95,19 @@ Slack only offers an API for sending workspace invitations on Enterprise Grid, s
 
 `https://homologybio.slack.com` on the public page is a sign-in address for existing members. It is not an invitation. Do not publish or paste a reusable invite link anywhere.
 
+## Introductions
+
+Introductions are what members were promised, so the review view has an Introductions tab to keep track of them. It records; it never contacts anyone. A reviewer makes the introduction themselves and notes it here.
+
+- **Record an introduction.** For one approved member, with another approved member or with someone outside Homology. An outsider is recorded by name and a short description only, with no contact details.
+- **Where it stands.** Suggested, Both asked, Made, Happened, or Dropped. "Both asked" is its own step so each side can agree before they are connected. Every change is kept with who made it and when.
+- **Owed an introduction.** Approved members who have not been part of a made introduction yet, longest wait first, each with what they asked for in their application.
+- **Possible fits.** For each of those members, up to three other members whose answers share words with what the person asked for. This is a word-overlap guide that runs in the reviewer's browser. Nothing is sent to any outside service, and it is not a recommendation.
+
+Rules the server enforces (see `src/introductions.js`, covered by `test/introductions.test.js`): both people must be approved members when it is recorded, never the same person, and exactly one of "another member" or "someone outside". Recording or updating one changes no application and sends nothing by email or to Slack.
+
+They are stored beside the applications, in the same private database, in their own collection.
+
 ## Review in Slack
 
 When the Slack settings are present, each new application is posted to one private channel, and reviewers can press Move to call, Approve, Decline, Move back to pending, Record call invite sent, Record welcome email sent, Record decline email sent, Record invitation sent, Mark as joined, Clear invitation record and Add note there. A decision made in Slack and one made in the review view are the same thing: same rules, same record of who and when (Slack changes are marked `via: slack` in the history), and the Slack message is redrawn after every change from either place.
@@ -174,6 +187,7 @@ npm run dev
 | `SLACK_WORKSPACE_URL` | no | Default `https://homologybio.slack.com`. |
 | `FIRESTORE_DATABASE` | no | Default `(default)`, the project's own database. |
 | `FIRESTORE_COLLECTION` | no | Default `applications`. |
+| `FIRESTORE_INTRO_COLLECTION` | no | Default `introductions`. Where introductions between members are kept. |
 | `RESEND_API_KEY` | for the receipt | Key for the mail service that sends the receipt. Keep it in Secret Manager. |
 | `EMAIL_FROM` | for the receipt | Who the receipt is from, for example `Homology <hello@homology.bio>`. The domain must be verified in Resend. |
 | `EMAIL_REPLY_TO` | no | Where a reply to the receipt goes. |
@@ -242,5 +256,6 @@ Production runs in the Google Cloud project `homology-bio`, at `https://homology
 - It does not schedule calls or know whether one happened. The booking link, once set, is only text in the invite.
 - It does not notify reviewers of new applications unless Slack review is set up. Without it, open `/review` to see what is pending.
 - It does not send Slack invitations, with or without Slack review.
+- It does not make introductions. It records the ones reviewers make, and its "possible fits" are a word match, not a judgment.
 - It does not check whether an invited person has joined Slack. A reviewer marks that.
 - It does not delete applications. Remove a record in the Firestore console if one must go.
