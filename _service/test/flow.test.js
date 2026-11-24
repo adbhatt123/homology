@@ -67,11 +67,15 @@ test('only the Homology site may post from a browser', async () => {
   await app.close();
 });
 
-test('the hidden trap field discards the submission quietly', async () => {
+// The rest of this rule is in test/spamcheck.test.js.
+test('the hidden field never drops an application', async () => {
   const app = await boot();
-  const res = await app.apply(valid({ company_website: 'http://spam.example' }));
+  const res = await app.apply(valid({ leave_blank: 'http://spam.example' }));
   assert.equal(res.status, 200);
-  assert.equal((await app.store.list()).length, 0);
+  const saved = await app.store.list();
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].status, 'pending');
+  assert.deepEqual(saved[0].spamCheck, { tripped: true });
   await app.close();
 });
 

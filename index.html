@@ -328,7 +328,9 @@
   }
   .form-problem { margin-top: 0; font-size: 1.0625rem; }
   .privacy { font-size: 0.9375rem; line-height: 1.45; color: var(--ink-soft); }
-  .trap { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+  /* The spam check: a field no person sees. It is fully hidden, and its name
+     means nothing to a browser, so autofill and password managers leave it alone. */
+  .trap { display: none; }
 
   .thanks {
     margin-top: 2.25rem;
@@ -570,8 +572,8 @@
         </div>
 
         <div class="trap" aria-hidden="true">
-          <label for="f-site">Leave this field empty</label>
-          <input id="f-site" name="company_website" type="text" tabindex="-1" autocomplete="off">
+          <label for="f-blank">Leave this field empty</label>
+          <input id="f-blank" name="leave_blank" type="text" tabindex="-1" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other">
         </div>
 
         <p class="privacy wide">Your answers are private. They are read only by the people who review applications and make introductions.</p>
@@ -712,7 +714,7 @@
         e.preventDefault();
         problem.hidden = true;
 
-        var data = { company_website: form.elements.company_website.value };
+        var data = { leave_blank: form.elements.leave_blank.value };
         var errors = {};
         var bad = false;
         Object.keys(required).forEach(function (name) {

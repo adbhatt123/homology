@@ -21,6 +21,7 @@ The folder name starts with an underscore so GitHub Pages leaves it out of the p
 Rules the server enforces (see `src/applications.js`, covered by `test/flow.test.js`):
 
 - A new application is always `pending`. Anything else an applicant sends is ignored.
+- No application is dropped out of sight. One that trips the spam check is saved and marked for a reviewer (see "The spam check").
 - A call invite can only be recorded while the application is at the `call` stage. A call, however it goes, grants nothing.
 - A welcome email can only be recorded for an `approved` application, and a decline email for a `declined` one. If the decision changes later the record stays, because the email did go out.
 - An invitation can only be recorded while the application is `approved`.
@@ -47,6 +48,23 @@ CALL_BOOKING_URL: "https://cal.com/your-name/intro"
 
 Nothing else changes: the draft then says "You can pick a time here:" followed by the link, in both the review view and Slack.
 
+### The spam check
+
+The form on the site has one field that people never see. A bot that fills in every field fills that one too.
+
+A filled hidden field does not prove a bot, though. A browser's autofill or a password manager can fill it for a real person, who then sees "Thanks for applying" like anyone else. So the service never throws such an application away:
+
+- It is checked and saved like any other, with status `pending`.
+- It is marked. The review view shows a "Check for spam" label and the Slack message says so under the name.
+- It gets no receipt email, because a bot may have typed someone else's address.
+- A reviewer then treats it like any other application: move it to a call, approve it, or decline it.
+
+What was typed into the hidden field is not kept. If the form has a mistake in it, the applicant is told about the mistake as usual, whatever the hidden field holds.
+
+The field is called `leave_blank` on the page and is hidden with `display: none`, so that autofill leaves it alone. The service also accepts the older name `company_website`, for pages that were open or cached before the name changed. Both names are in `TRAP_FIELDS` in `src/server.js`, and `test/spamcheck.test.js` checks that the page and the service agree.
+
+Before 2026-11-24 a filled hidden field made the service answer "Thanks" and keep nothing. One real application was lost that way, which is why it works like this now.
+
 ### The receipt
 
 This is the one email the service sends by itself. When an application is saved, the applicant gets a short note: we got it, you'll hear back from us soon. It is plain text, holds no link, and says nothing about the outcome. The wording is in `src/emails.js`.
@@ -56,7 +74,8 @@ It goes out through Resend from an address on homology.bio (see `src/mailer.js`)
 - **It cannot be used to send someone else's text.** The subject, sender and body are fixed. The only thing in it an applicant typed is a first name, and only if it is made of letters.
 - **One address gets at most one receipt a day**, however many times it is entered into the form. Every application is still saved.
 - **It never blocks an application.** The application is saved first. If the mail service is down the failure is logged, the reviewers still see the application, and the review view shows "Not emailed".
-- **Nothing is sent for a submission that is not saved**: an invalid one, a trap-field one, or one past the rate limit.
+- **Nothing is sent for a submission that is not saved**: an invalid one, or one past the rate limit.
+- **Nothing is sent for an application that trips the spam check** (see below). It is saved, and a reviewer looks first.
 
 To switch it on:
 

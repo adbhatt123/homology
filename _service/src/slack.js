@@ -31,6 +31,7 @@ import {
   recordInvitation,
   setNotes,
   setStatus,
+  spamCheckOf,
 } from './applications.js';
 import { draftUrls } from './emails.js';
 import { normalizeLinkedin } from './validate.js';
@@ -142,6 +143,10 @@ function invitationLine(app) {
   return '*Slack invitation:* not sent. Approving adds nobody to Slack. Open Slack invitations, invite the email address above as a member, then record it here. Never use a shared invite link.';
 }
 
+// Shown on an application that filled in the form's hidden field.
+export const SPAM_CHECK_LINE =
+  "*Check this one before you trust it.* It filled in a field on the form that people can't see. That is usually a bot, but a browser's autofill can do it for a real person too. It was kept so you can decide. No receipt email was sent.";
+
 // `drafts` holds the Gmail draft links: { call, welcome, decline }.
 export function applicationMessage(app, { reviewUrl, invitesUrl, drafts = {} }) {
   const a = app.answers;
@@ -152,6 +157,7 @@ export function applicationMessage(app, { reviewUrl, invitesUrl, drafts = {} }) 
 
   const blocks = [
     { type: 'header', text: plain(a.fullName, 150) },
+    ...(spamCheckOf(app).tripped ? [{ type: 'section', text: markup(SPAM_CHECK_LINE) }] : []),
     {
       type: 'section',
       fields: [
@@ -247,7 +253,10 @@ export function applicationMessage(app, { reviewUrl, invitesUrl, drafts = {} }) 
   }
 
   // The line phones show in a notification. It names nobody.
-  const text = app.status === 'pending' && !app.review ? 'New Homology application' : `Homology application: ${STATUS_LABELS[app.status].toLowerCase()}`;
+  const fresh = app.status === 'pending' && !app.review;
+  const text = fresh
+    ? `New Homology application${spamCheckOf(app).tripped ? ' (check for spam)' : ''}`
+    : `Homology application: ${STATUS_LABELS[app.status].toLowerCase()}`;
   return { text, blocks };
 }
 

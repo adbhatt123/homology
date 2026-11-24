@@ -137,7 +137,6 @@ test('nothing is emailed for a submission that is not saved', async () => {
   const { app, mail } = await start({ APPLY_PER_IP: '3' });
   assert.equal((await app.apply(valid({ email: 'not-an-email' }))).status, 422);
   assert.equal((await app.apply(valid({ workingOn: ' ' }))).status, 422);
-  assert.equal((await app.apply(valid({ company_website: 'http://spam.example' }))).status, 200);
   assert.equal((await app.apply(valid(), { Origin: 'https://evil.example' })).status, 403);
   assert.equal(mail.state.sent.length, 0);
   assert.equal((await app.store.list()).length, 0);

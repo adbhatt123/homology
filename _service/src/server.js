@@ -35,6 +35,7 @@ import {
   receiptOf,
   setNotes,
   setStatus,
+  spamCheckOf,
   STATUS_LABELS,
 } from './applications.js';
 import { draftUrls, receiptEmail } from './emails.js';
@@ -63,6 +64,9 @@ const SLACK_WAIT_MS = 3500;
 const NOTIFY_WAIT_MS = 5500;
 // One address gets at most one receipt in this long, however often it applies.
 const RECEIPT_GAP_MS = 24 * 3600_000;
+// The form's hidden spam-check field. The second name is the one the page
+// used until 2026-11-24, kept for pages that were open or cached before then.
+export const TRAP_FIELDS = ['leave_blank', 'company_website'];
 
 export const THANKS = 'Thanks for applying. We review every application and will email you with next steps.';
 
@@ -202,6 +206,12 @@ export async function createApp({
   // Returns the application as it now stands.
   async function sendReceipt(application) {
     if (!mailer) return application;
+    // Whatever tripped the spam check may be a bot typing someone else's
+    // address, so that address gets no email until a reviewer has looked.
+    if (spamCheckOf(application).tripped) {
+      event('receipt.skipped', { id: application.id, reason: 'spam_check' });
+      return application;
+    }
     try {
       const earlier = await store.listByEmail(application.emailKey);
       const recent = earlier.some(
@@ -272,12 +282,11 @@ export async function createApp({
       );
     }
 
-    // A field people never see. Anything that fills it in is not a person:
-    // answer as if it worked and keep nothing.
-    if (clean(data?.company_website)) {
-      event('application.discarded');
-      return respond(200, { ok: true, message: THANKS }, { title: 'Application received', lines: [THANKS] });
-    }
+    // A field people never see. Whatever fills it in is usually a bot, but a
+    // browser's autofill can do it for a real person. So nothing is dropped:
+    // the application is checked and saved like any other, marked for a
+    // reviewer, and sent no receipt (see spamCheckOf in applications.js).
+    const tripped = TRAP_FIELDS.some((name) => clean(data?.[name]));
 
     const result = validateApplication(data);
     if (!result.ok) {
@@ -291,9 +300,9 @@ export async function createApp({
       );
     }
 
-    const application = newApplication(result.values, now().toISOString(), randomUUID());
+    const application = newApplication(result.values, now().toISOString(), randomUUID(), { spamCheck: tripped });
     await store.create(application);
-    event('application.submitted', { id: application.id });
+    event('application.submitted', { id: application.id, ...(tripped ? { spamCheck: 'tripped' } : {}) });
     // Tell the applicant we have it, then tell the reviewers. The application
     // is already saved, so nothing that happens in email or Slack can lose it
     // or change what the applicant sees on the page.
@@ -371,6 +380,7 @@ export async function createApp({
     return {
       ...app,
       receipt: receiptOf(app),
+      spamCheck: spamCheckOf(app),
       call: callOf(app),
       emails: emailsOf(app),
       callInviteUrl: drafts.call,

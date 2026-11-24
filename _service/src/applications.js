@@ -4,7 +4,9 @@
 // These things are deliberately separate:
 //   1. applying        creates a record with status "pending" and nothing else.
 //                      The service emails the applicant a short receipt, which
-//                      says we have it and nothing more
+//                      says we have it and nothing more. An application that
+//                      trips the form's spam check is kept too, marked for a
+//                      reviewer, and gets no receipt
 //   2. the intro call  an optional stage: a reviewer moves the application to
 //                      "call", invites the applicant to a short call by email,
 //                      and records that the invite went out
@@ -55,7 +57,13 @@ const noEmails = () => ({ welcome: noEmail(), decline: noEmail() });
 // The record of those emails, also for applications saved before it existed.
 export const emailsOf = (app) => ({ ...noEmails(), ...(app.emails || {}) });
 
-export function newApplication(values, nowIso, id) {
+// The form has a field people never see (see TRAP_FIELDS in server.js). When
+// something fills it in, that is usually a bot, but a browser's autofill can do
+// it for a real person too. So the application is kept and marked, and a
+// reviewer decides. Nothing is ever dropped without a person seeing it.
+export const spamCheckOf = (app) => ({ tripped: false, ...(app.spamCheck || {}) });
+
+export function newApplication(values, nowIso, id, { spamCheck = false } = {}) {
   return {
     id,
     schema: 1,
@@ -63,6 +71,7 @@ export function newApplication(values, nowIso, id) {
     answers: { ...values },
     emailKey: values.email.toLowerCase(),
     status: 'pending',
+    spamCheck: { tripped: Boolean(spamCheck) },
     review: null,
     notes: { text: '', updatedBy: null, updatedAt: null },
     receipt: noReceipt(),
@@ -76,7 +85,7 @@ export function newApplication(values, nowIso, id) {
       joinedRecordedBy: null,
       joinedAt: null,
     },
-    history: [{ at: nowIso, by: 'applicant', action: 'submitted' }],
+    history: [{ at: nowIso, by: 'applicant', action: 'submitted', ...(spamCheck ? { spamCheck: 'tripped' } : {}) }],
   };
 }
 

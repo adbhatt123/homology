@@ -294,8 +294,14 @@
     return h('div', { class: 'empty' }, h('strong', {}, title), body);
   }
 
+  // The form's hidden spam-check field was filled in (see README, "The spam check").
+  function tripped(app) {
+    return Boolean(app.spamCheck && app.spamCheck.tripped);
+  }
+
   function chips(app) {
     const out = [h('span', { class: `chip ${app.status}` }, state.labels[app.status])];
+    if (tripped(app)) out.push(h('span', { class: 'chip warn' }, 'Check for spam'));
     if (app.status === 'call') {
       out.push(h('span', { class: `chip ${app.call.inviteSentAt ? '' : 'quiet'}` }, app.call.inviteSentAt ? 'Call invite sent' : 'Call invite not sent'));
     }
@@ -341,6 +347,11 @@
     ];
 
     const left = h('div', {},
+      tripped(app)
+        ? h('p', { class: 'spam-check' },
+            h('strong', {}, 'Check this one before you trust it. '),
+            "It filled in a field on the form that people can't see. That is usually a bot, but a browser's autofill can do it for a real person too. It was kept so you can decide. No receipt email was sent.")
+        : null,
       h('dl', { class: 'facts' },
         h('dt', {}, 'Email'), h('dd', {}, h('a', { href: `mailto:${encodeURIComponent(a.email).replace(/%40/g, '@')}` }, a.email), copyEmail),
         h('dt', {}, 'LinkedIn'), h('dd', {}, profile ? h('a', { href: profile, target: '_blank', rel: 'noopener noreferrer' }, profile.replace(/^https:\/\/(www\.)?/, '')) : a.linkedinUrl),
@@ -351,7 +362,7 @@
         app.receipt && app.receipt.sentAt
           ? [h('dt', {}, 'Receipt'), h('dd', {}, `Emailed to them ${fmt(app.receipt.sentAt)}`)]
           : state.config.receipt && state.config.receipt.on
-            ? [h('dt', {}, 'Receipt'), h('dd', {}, 'Not emailed')]
+            ? [h('dt', {}, 'Receipt'), h('dd', {}, tripped(app) ? 'Not emailed, because of the spam check' : 'Not emailed')]
             : null,
       ),
       h('div', { class: 'answers' }, answers.map(([q, text]) => h('div', { class: 'answer' }, h('h3', {}, q), h('p', {}, text)))),
@@ -591,7 +602,7 @@
 
   function history(app) {
     const describe = (e) => {
-      if (e.action === 'submitted') return 'Application received';
+      if (e.action === 'submitted') return e.spamCheck ? 'Application received, with the hidden spam-check field filled in' : 'Application received';
       if (e.action === 'receipt') return 'Receipt emailed to the applicant';
       if (e.action === 'notes') return `${e.by} edited the private notes`;
       if (e.action === 'status') return `${e.by} changed the decision from ${state.labels[e.from].toLowerCase()} to ${state.labels[e.to].toLowerCase()}`;
